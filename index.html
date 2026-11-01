@@ -31,14 +31,20 @@
   h1 { font-weight: 700; font-size: clamp(2.4rem, 6vw, 3.8rem); line-height: 1.05; margin: 0 0 .6rem; letter-spacing: -0.01em; }
   header p { margin: 0; color: var(--leise); font-size: 1.2rem; line-height: 1.6; max-width: 36rem; }
   ul { list-style: none; margin: 0 auto; padding: 0; max-width: 60rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1.6rem; }
-  a.spiel {
-    display: grid; grid-template-rows: 13rem auto; height: 100%;
-    color: inherit; text-decoration: none; border-radius: 18px; overflow: hidden;
+  .spiel {
+    position: relative; display: grid; grid-template-rows: 13rem 1fr; height: 100%;
+    border-radius: 18px; overflow: hidden;
     background: #1f1b40; border: 2px solid transparent;
     transition: border-color .15s ease, transform .15s ease;
   }
-  a.spiel:hover { border-color: rgba(255,217,138,.6); transform: translateY(-2px); }
-  a.spiel:focus-visible { outline: 3px solid var(--gold); outline-offset: 4px; }
+  .spiel:hover { border-color: rgba(255,217,138,.6); transform: translateY(-2px); }
+  .spiel:focus-within { outline: 3px solid var(--gold); outline-offset: 4px; }
+  .spiel h2 a { color: inherit; text-decoration: none; outline: none; }
+  .spiel h2 a::after { content: ""; position: absolute; inset: 0; }
+  .direkt { position: relative; z-index: 1; display: inline-block; margin-top: 1rem; padding: .55rem 1.1rem;
+    border-radius: 999px; border: 2px solid var(--gold); color: var(--gold); text-decoration: none; font-weight: 700; font-size: 1.05rem; }
+  .direkt:hover { background: rgba(255,217,138,.14); }
+  .direkt:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
   .bild { position: relative; overflow: hidden; }
   .bild svg { position: absolute; inset: 0; width: 100%; height: 100%; }
   .info { padding: 1.3rem 1.5rem 1.6rem; }
@@ -50,7 +56,7 @@
   .akademie .bild { background: linear-gradient(180deg, #241f55 0%, #5a4c8c 45%, #f0b98a 78%, #e7c3bb 100%); }
   .akademie h2 { color: var(--gold); font-family: "Uncial Antiqua", "Palatino Linotype", Georgia, serif; font-weight: 400; }
   footer { max-width: 60rem; margin: 2.6rem auto 0; color: var(--leise); font-size: 1rem; line-height: 1.6; }
-  @media (prefers-reduced-motion: reduce) { a.spiel { transition: none; } a.spiel:hover { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .spiel { transition: none; } .spiel:hover { transform: none; } }
 </style>
 </head>
 <body>
@@ -61,7 +67,7 @@
 
 <ul>
   <li>
-    <a class="spiel see" href="morskoi_boi.html">
+    <div class="spiel see">
       <div class="bild" aria-hidden="true">
         <svg viewBox="0 0 400 208" preserveAspectRatio="xMidYMid slice">
           <path d="M60 118 h70 l8 -10 h22 l6 -14 h10 l4 14 h26 l10 10 h20 l-12 12 h-150 z" fill="#0b2129" opacity=".9"/>
@@ -77,14 +83,14 @@
         </svg>
       </div>
       <div class="info">
-        <h2>Seeschlacht</h2>
+        <h2><a href="morskoi_boi.html">Seeschlacht</a></h2>
         <p class="unter">Морской бой</p>
         <p>Blick durchs Periskop, Schiffe ziehen vorbei. Feuer den Torpedo im richtigen Moment ab und halte vor.</p>
       </div>
-    </a>
+    </div>
   </li>
   <li>
-    <a class="spiel akademie" href="akademie.html">
+    <div class="spiel akademie">
       <div class="bild" aria-hidden="true">
         <svg viewBox="0 0 400 208" preserveAspectRatio="xMidYMid slice">
           <circle cx="92" cy="150" r="22" fill="#ffe2b0" opacity=".9"/>
@@ -96,11 +102,12 @@
         </svg>
       </div>
       <div class="info">
-        <h2>Die Akademie über den Wolken</h2>
+        <h2><a href="akademie.html">Die Akademie über den Wolken</a></h2>
         <p class="unter">Zauberstab, Runen und Besenflug</p>
         <p>Zeichne Runen in die Luft, wehre die Sturmkugeln des Wächters ab und flieg auf dem Besen durch einen Ringparcours um die Akademie.</p>
+        <a class="direkt" href="akademie.html#besen">Direkt zum Besenflug</a>
       </div>
-    </a>
+    </div>
   </li>
 </ul>
 

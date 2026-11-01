@@ -38,6 +38,13 @@
   }
   .einleitung { font-size: 1.3rem; line-height: 1.6; margin: 0 0 2rem; }
   .knoepfe { display: flex; flex-wrap: wrap; gap: .9rem; margin-bottom: 1.2rem; }
+  .wahl { border: 0; padding: 0; margin: 0 0 1.5rem; }
+  .wahl legend { padding: 0; margin-bottom: .6rem; font-size: 1.05rem; color: var(--dunst); }
+  .wahl-knoepfe { display: flex; flex-wrap: wrap; gap: .6rem; }
+  .wahl-knoepfe { background: rgba(10,8,30,.45); border-radius: 999px; padding: .35rem; display: inline-flex; }
+  .wahl button { min-height: 3rem; font-size: 1.1rem; border-radius: 999px; background: transparent; color: var(--dunst); border: 2px solid transparent; }
+  .wahl button[aria-pressed="true"] { background: var(--gold); color: #221d45; }
+  .wahl button[aria-pressed="false"]:hover { color: var(--pergament); }
   button {
     font: 700 1.2rem/1 var(--text); min-height: 3.6rem; padding: 0 1.6rem;
     border-radius: 10px; cursor: pointer; border: 2px solid var(--gold);
@@ -73,6 +80,13 @@
   <div class="tafel">
     <h1>Die Akademie über den Wolken</h1>
     <p class="einleitung">Dein erster Tag als Lehrling. Im Übungshof lernst du vier Runen, die du mit dem Zauberstab in die Luft zeichnest, und am Ende das Fliegen auf dem Besen.</p>
+    <fieldset class="wahl">
+      <legend>Wo möchtest du beginnen?</legend>
+      <div class="wahl-knoepfe">
+        <button type="button" id="wahlHof" aria-pressed="true">Übungshof mit Zauberstab</button>
+        <button type="button" id="wahlBesen" aria-pressed="false">Besenflug</button>
+      </div>
+    </fieldset>
     <div class="knoepfe">
       <button id="btnVR" class="haupt" disabled>In VR starten</button>
       <button id="btnDesk" class="neben">Am Bildschirm üben</button>
@@ -84,13 +98,14 @@
       <dt>A oder X</dt><dd>Nächste Lektion</dd>
       <dt>B oder Y</dt><dd>Runenbuch ein- und ausblenden</dd>
       <dt>Stick</dt><dd>Nach links oder rechts drehen</dd>
+      <dt>Stick drücken</dt><dd>Zwischen Übungshof und Besenflug wechseln</dd>
       <dt>Besen</dt><dd>Mit beiden Händen greifen, beide Abzüge halten. Neigen, drehen und schieben zum Lenken, einen Abzug loslassen zum Bremsen.</dd>
     </dl>
     <p class="zurueck"><a href="./">Zur Spielauswahl</a></p>
   </div>
 </main>
 <div id="hud" class="versteckt">
-  <div class="hilfe">Maustaste gedrückt halten und eine Rune zeichnen, loslassen zum Zaubern. Rechte Maustaste ziehen oder Pfeiltasten zum Umsehen. Leertaste wechselt zur nächsten Lektion, R blendet das Runenbuch um, Esc führt zurück. In der Flugstunde steigst du mit F auf den Besen.</div>
+  <div class="hilfe">Maustaste gedrückt halten und eine Rune zeichnen, loslassen zum Zaubern. Rechte Maustaste ziehen oder Pfeiltasten zum Umsehen. Leertaste wechselt zur nächsten Lektion, R blendet das Runenbuch um, Esc führt zurück. B wechselt zwischen Übungshof und Besenflug, dort steigst du mit F auf den Besen.</div>
   <img id="hudBuch" alt="Runenbuch mit den vier Runen">
 </div>
 
@@ -1048,9 +1063,12 @@ const board = (() => {
     }
     g.fillStyle = '#9f95c8'; g.font = `24px ${BODY_FONT}`;
     const flugHinweis = L.id === 'flug' || L.id === 'frei';
-    g.fillText(mode === 'desk'
-      ? (flugHinweis ? 'F: Besen besteigen oder landen. Pfeile lenken, W/S Tempo, A/D seitwärts, Q/E runter/hoch.' : 'Maustaste halten und zeichnen, loslassen zum Zaubern. Leertaste: nächste Lektion.')
-      : (flugHinweis ? 'Besen: beide Abzüge halten. Im Flug landet A/X sofort, B/Y schaltet den Tunnelblick.' : 'Abzug halten und zeichnen, loslassen zum Zaubern. A/X: nächste Lektion, B/Y: Runenbuch.'), 60, 532);
+    g.font = `22px ${BODY_FONT}`;
+    const hinweis = mode === 'desk'
+      ? (flugHinweis ? 'F: Besen besteigen oder landen. Pfeile lenken, W/S Tempo, A/D seitwärts, Q/E runter/hoch. B: zum Übungshof.' : 'Maustaste halten und zeichnen, loslassen zum Zaubern. Leertaste: nächste Lektion. B: zum Besenflug.')
+      : (flugHinweis ? 'Besen: beide Abzüge halten. Im Flug landet A/X sofort, B/Y schaltet den Tunnelblick. Stick drücken: zum Übungshof.' : 'Abzug halten und zeichnen, loslassen zum Zaubern. A/X: nächste Lektion, B/Y: Runenbuch. Stick drücken: zum Besenflug.');
+    const breit = g.measureText(hinweis).width > 900;
+    wrapText(g, hinweis, 60, breit ? 512 : 532, 900, 27);
     tex.needsUpdate = true;
   }
   return { g3, crown, draw };
@@ -1652,7 +1670,7 @@ const ctrls = [0, 1].map(i => {
   const grip = renderer.xr.getControllerGrip(i);
   const hand = renderer.xr.getHand(i);
   rig.add(ray, grip, hand);
-  const c = { i, ray, grip, hand, source: null, prev4: false, prev5: false, stickReady: true, grabbing: false, squeezing: false, selecting: false };
+  const c = { i, ray, grip, hand, source: null, prev3: false, prev4: false, prev5: false, stickReady: true, grabbing: false, squeezing: false, selecting: false };
   ray.addEventListener('connected', e => {
     c.source = e.data;
     const ownerIsRight = wandOwner && wandOwner.source && wandOwner.source.handedness === 'right';
@@ -1742,6 +1760,9 @@ function updateVR(dt) {
       } else { bookWanted = !bookWanted; placeBook(); }
     }
     c.prev4 = b4; c.prev5 = b5;
+    const b3 = !!(gp.buttons[3] && gp.buttons[3].pressed);
+    if (b3 && !c.prev3) toggleArea();
+    c.prev3 = b3;
     const sx = gp.axes.length > 2 ? gp.axes[2] : 0;
     if (Math.abs(sx) > 0.7 && c.stickReady) { snapTurn(sx > 0 ? -30 * DEG : 30 * DEG); c.stickReady = false; }
     else if (Math.abs(sx) < 0.3) c.stickReady = true;
@@ -1808,6 +1829,7 @@ window.addEventListener('keydown', e => {
   if (mode !== 'desk') return;
   desk.keys[e.key] = true;
   if (e.key === ' ') { e.preventDefault(); nextLesson(); }
+  if ((e.key === 'b' || e.key === 'B') && !e.repeat) toggleArea();
   if ((e.key === 'f' || e.key === 'F') && !e.repeat) { if (flight.active) land('abbruch'); else if (broomAvailable()) mountBroom(); }
   if (e.key === 'r' || e.key === 'R') { const img = document.getElementById('hudBuch'); img.style.visibility = img.style.visibility === 'hidden' ? 'visible' : 'hidden'; }
   if (e.key === 'Escape') showMenu();
@@ -2378,6 +2400,32 @@ function showMenu() {
   board.draw();
 }
 
+// ---------- Wahl zwischen Übungshof und Besenflug ----------
+let startChoice = location.hash === '#besen' ? 'besen' : 'hof';
+const wahlHof = document.getElementById('wahlHof'), wahlBesen = document.getElementById('wahlBesen');
+function setChoice(c) {
+  startChoice = c;
+  wahlHof.setAttribute('aria-pressed', String(c === 'hof'));
+  wahlBesen.setAttribute('aria-pressed', String(c === 'besen'));
+  try { history.replaceState(null, '', c === 'besen' ? '#besen' : location.pathname + location.search); } catch (e) { /* egal */ }
+}
+wahlHof.addEventListener('click', () => setChoice('hof'));
+wahlBesen.addEventListener('click', () => setChoice('besen'));
+setChoice(startChoice);
+const inBroomArea = () => { const id = LESSONS[game.lesson].id; return id === 'flug' || id === 'frei'; };
+function applyChoice() {
+  if (startChoice === 'besen' && !inBroomArea()) startLesson(4);
+  else if (startChoice === 'hof' && LESSONS[game.lesson].id === 'flug') startLesson(0);
+}
+function toggleArea() {
+  if (flight.active || mode === 'menu') return;
+  const toBroom = !inBroomArea();
+  startLesson(toBroom ? 4 : 0);
+  setChoice(toBroom ? 'besen' : 'hof');
+  sound.play('erkannt', null, 0.5);
+  floatText(toBroom ? 'Zur Flugstunde' : 'Zum Übungshof', tmpA.copy(head.dir).multiplyScalar(1.5).add(head.pos), '#ffd98a', 0.07);
+}
+
 function startDesk() {
   sound.resume();
   mode = 'desk';
@@ -2391,6 +2439,7 @@ function startDesk() {
   wand.quaternion.copy(DESK_WAND_REST);
   wand.visible = true;
   wandTip.position.set(0, 0, -0.322);
+  applyChoice();
   board.draw();
 }
 
@@ -2408,6 +2457,7 @@ async function startVR() {
     ui.start.classList.add('versteckt');
     ui.hud.classList.add('versteckt');
     setParticleScale();
+    applyChoice();
     board.draw();
   } catch (err) {
     ui.status.textContent = 'VR konnte nicht gestartet werden: ' + (err && err.message ? err.message : err);
@@ -2490,7 +2540,7 @@ startLesson(0);
 setParticleScale();
 renderer.setAnimationLoop(frame);
 window.__akademieBereit = true;
-window.__akademie = { flight, course, broom, colliders, mountBroom, land, COURSE, shield, fx, orbDist: () => fx.orbs.length ? fx.orbs[0].g.position.distanceTo(head.pos) : -1, THREE, camera, desk, renderer, particles, ctrls, game, startLesson, castSpell, crystals, lanterns, crates, guardian, head, recognizeRune, get mode() { return mode; }, get stroke() { return stroke; } };
+window.__akademie = { setChoice, toggleArea, get startChoice() { return startChoice; }, flight, course, broom, colliders, mountBroom, land, COURSE, shield, fx, orbDist: () => fx.orbs.length ? fx.orbs[0].g.position.distanceTo(head.pos) : -1, THREE, camera, desk, renderer, particles, ctrls, game, startLesson, castSpell, crystals, lanterns, crates, guardian, head, recognizeRune, get mode() { return mode; }, get stroke() { return stroke; } };
 </script>
 </body>
 </html>
