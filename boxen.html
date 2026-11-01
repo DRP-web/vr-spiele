@@ -69,7 +69,7 @@
   @media (max-width: 680px) { #start { background: rgba(13,11,18,.9); } }
 </style>
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
 </script>
 </head>
 <body>
@@ -112,6 +112,15 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// Eingebettete Schriften laden, bevor Ringboden, Schürze und Tafel beschriftet werden (höchstens 1,5 s)
+if (document.fonts && document.fonts.load) {
+  await Promise.race([
+    Promise.all(['80px "Alfa Slab One"', '30px "Barlow Condensed"', '600 30px "Barlow Condensed"'].map(f => document.fonts.load(f))),
+    new Promise(r => setTimeout(r, 1500)),
+  ]).catch(() => {});
+}
 
 // =====================================================================
 //  Grundlagen
@@ -286,7 +295,7 @@ class Particles {
     this.aPos.needsUpdate = true; this.aCol.needsUpdate = true; this.aSize.needsUpdate = true; this.aAlpha.needsUpdate = true;
   }
 }
-const particles = new Particles(2500);
+const particles = new Particles(1400);
 scene.add(particles.points);
 const C_SWEAT = new THREE.Color(0xcfe4ff), C_FLASH = new THREE.Color(0xffffff), C_DUST = new THREE.Color(0x8a7a64), C_GOLD = new THREE.Color(0xffc870);
 
@@ -366,12 +375,27 @@ scene.add(ringGroup);
     ringGroup.add(housing, lens);
   }
   const cone = new THREE.Mesh(new THREE.ConeGeometry(3.7, 5.0, 40, 1, true), new THREE.ShaderMaterial({
-    uniforms: {}, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    uniforms: {}, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
     vertexShader: 'varying float vY; void main() { vY = uv.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: 'varying float vY; void main() { float a = 0.045 * smoothstep(0.0, 0.9, vY); gl_FragColor = vec4(vec3(1.0, 0.93, 0.8) * a, 1.0); }',
   }));
   cone.position.y = 2.5;
   ringGroup.add(cone);
+  // Pfosten, Polster, Seile und Gerüst pro Farbe zu je einem Körper verschmelzen (spart Draw-Calls)
+  const groups = new Map();
+  for (const m of [...ringGroup.children]) {
+    if (!m.isMesh || Array.isArray(m.material) || m === cone) continue;
+    const key = m.material.type + ':' + m.material.color.getHexString();
+    if (!groups.has(key)) groups.set(key, { mat: m.material, geos: [] });
+    m.updateMatrix();
+    groups.get(key).geos.push(m.geometry.clone().applyMatrix4(m.matrix));
+    ringGroup.remove(m);
+  }
+  for (const { mat, geos } of groups.values()) {
+    const merged = mergeGeometries(geos, false);
+    geos.forEach(g => g.dispose());
+    if (merged) ringGroup.add(new THREE.Mesh(merged, mat));
+  }
   // Hallenboden
   const hall = new THREE.Mesh(new THREE.PlaneGeometry(80, 80).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x18151c }));
   hall.position.y = -1.06;
@@ -396,10 +420,27 @@ const crowd = (() => {
     }
   }
   const n = spots.length;
+  const U = { uTime: { value: 0 }, uExcite: { value: 0.15 } };
+  // Das Wippen rechnet die Grafikkarte: keine 1100 Matrizen pro Bild mehr in JavaScript
+  const bob = shader => {
+    shader.uniforms.uTime = U.uTime; shader.uniforms.uExcite = U.uExcite;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 aCrowd;\nuniform float uTime;\nuniform float uExcite;')
+      .replace('#include <project_vertex>', `vec4 mvPosition = instanceMatrix * vec4(transformed, 1.0);
+        mvPosition.y += max(0.0, sin(uTime * aCrowd.y * (1.0 + uExcite) + aCrowd.x)) * 0.1 * uExcite;
+        mvPosition = modelViewMatrix * mvPosition;
+        gl_Position = projectionMatrix * mvPosition;`);
+  };
   const bodyMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
   const headMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-  const bodies = new THREE.InstancedMesh(new THREE.CapsuleGeometry(0.2, 0.42, 3, 8), bodyMat, n);
-  const heads = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 10, 8), headMat, n);
+  bodyMat.onBeforeCompile = bob; headMat.onBeforeCompile = bob;
+  const bodyGeo = new THREE.CapsuleGeometry(0.2, 0.42, 2, 6), headGeo = new THREE.SphereGeometry(0.11, 7, 5);
+  const ph = new Float32Array(n * 2);
+  spots.forEach((s, i) => { ph[i * 2] = s.ph; ph[i * 2 + 1] = s.f; });
+  bodyGeo.setAttribute('aCrowd', new THREE.InstancedBufferAttribute(ph, 2));
+  headGeo.setAttribute('aCrowd', new THREE.InstancedBufferAttribute(ph, 2));
+  const bodies = new THREE.InstancedMesh(bodyGeo, bodyMat, n);
+  const heads = new THREE.InstancedMesh(headGeo, headMat, n);
   const clothes = [0x3a3540, 0x4a3a2c, 0x2a3346, 0x5a2a2a, 0x3c4a3a, 0x55504a, 0x2b2b2e, 0x6a5a40];
   const skins = [0xd9a98a, 0xb98262, 0x8a5634, 0xe7c0a2, 0x6b4128];
   const col = new THREE.Color();
@@ -409,21 +450,19 @@ const crowd = (() => {
   });
   scene.add(bodies, heads);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new V3(1, 1, 1), p = new V3();
+  spots.forEach((s, i) => {
+    p.set(s.x, s.y + 0.5 * s.h, s.z); sc.set(1, s.h, 1); m.compose(p, q, sc); bodies.setMatrixAt(i, m);
+    p.y = s.y + 1.02 * s.h; sc.set(1, 1, 1); m.compose(p, q, sc); heads.setMatrixAt(i, m);
+  });
+  bodies.frustumCulled = false; heads.frustumCulled = false;
   let excite = 0.15;
   return {
     spots, get excite() { return excite; },
     cheer(v) { excite = Math.min(1.2, excite + v); },
     update(dt, time) {
       excite = Math.max(0.15, excite - dt * 0.35);
-      for (let i = 0; i < n; i++) {
-        const s = spots[i];
-        const b = Math.max(0, Math.sin(time * s.f * (1 + excite) + s.ph)) * 0.1 * excite;
-        p.set(s.x, s.y + 0.5 * s.h + b, s.z); sc.set(1, s.h, 1);
-        m.compose(p, q, sc); bodies.setMatrixAt(i, m);
-        p.y = s.y + 1.02 * s.h + b; sc.set(1, 1, 1);
-        m.compose(p, q, sc); heads.setMatrixAt(i, m);
-      }
-      bodies.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
+      U.uTime.value = time;
+      U.uExcite.value = excite;
     },
     flashes(count) {
       for (let k = 0; k < count; k++) {
@@ -564,14 +603,16 @@ function solveIK(a, target, l1, l2, pole, outMid, outEnd) {
   tC.normalize();
   outMid.copy(a).addScaledVector(tB, l1 * cosA).addScaledVector(tC, l1 * sinA);
 }
-function placeLimb(mesh, a, b) {
+const _lq = new THREE.Quaternion(), _lp = new V3(), _ls = new V3(), _lm = new THREE.Matrix4(), _qI = new THREE.Quaternion();
+// Gliedmaße von a nach b mit Radius r als Instanz i setzen
+function setLimb(i, a, b, r) {
   tD.subVectors(b, a);
-  const len = tD.length();
-  mesh.position.copy(a).addScaledVector(tD, 0.5);
-  if (len > 1e-6) mesh.quaternion.setFromUnitVectors(UP, tD.multiplyScalar(1 / len));
-  mesh.scale.set(1, Math.max(len, 1e-3), 1);
+  const len = Math.max(tD.length(), 1e-3);
+  _lq.setFromUnitVectors(UP, tD.multiplyScalar(1 / len));
+  _lm.compose(_lp.addVectors(a, b).multiplyScalar(0.5), _lq, _ls.set(r, len, r));
+  opp.body.limb.setMatrixAt(i, _lm);
 }
-const limbGeo = (r0, r1) => new THREE.CylinderGeometry(r1, r0, 1, 10);
+function setJoint(i, p, r) { _lm.compose(p, _qI, _ls.set(r, r, r)); opp.body.joint.setMatrixAt(i, _lm); }
 
 const opp = (() => {
   const root = new THREE.Group();
@@ -589,44 +630,48 @@ const opp = (() => {
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.06, 0.13, 10), M.skin); neck.position.y = 0.63; torso.add(neck);
   const shL = new THREE.Object3D(), shR = new THREE.Object3D(); torso.add(shL, shR);
   const headG = new THREE.Group(); torso.add(headG);
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.115, 20, 16), M.skin); skull.scale.set(0.9, 1.08, 1.0);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.121, 20, 10, 0, Math.PI * 2, 0, Math.PI * 0.42), M.hair); hair.position.set(0, 0.012, -0.012);
-  const eyes = [], pupils = [];
+  // Kopfteile pro Material zu je einem Körper verschmolzen (12 Teile -> 6 Draw-Calls)
+  const shaped = (geo, x, y, z, sx = 1, sy = 1, sz = 1, rz = 0) => {
+    const m = new THREE.Matrix4().compose(new V3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, rz)), new V3(sx, sy, sz));
+    return geo.applyMatrix4(m);
+  };
+  const skinParts = [shaped(new THREE.SphereGeometry(0.115, 20, 16), 0, 0, 0, 0.9, 1.08, 1.0)];
+  const hairParts = [shaped(new THREE.SphereGeometry(0.121, 20, 10, 0, Math.PI * 2, 0, Math.PI * 0.42), 0, 0.012, -0.012)];
+  const eyeParts = [], pupilParts = [];
   for (const sx of [1, -1]) {
-    const e = new THREE.Mesh(new THREE.SphereGeometry(0.017, 10, 8), M.eye); e.position.set(sx * 0.038, 0.02, 0.098); e.scale.z = 0.5;
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 6), M.pupil); p.position.set(sx * 0.038, 0.02, 0.107);
-    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.01, 0.012), M.hair); brow.position.set(sx * 0.038, 0.046, 0.103); brow.rotation.z = -sx * 0.18;
-    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 8), M.skin); ear.position.set(sx * 0.103, 0.0, -0.005); ear.scale.set(0.5, 1, 0.8);
-    eyes.push(e); pupils.push(p);
-    headG.add(e, p, brow, ear);
+    eyeParts.push(shaped(new THREE.SphereGeometry(0.017, 10, 8), sx * 0.038, 0, 0.098, 1, 1, 0.5));
+    pupilParts.push(shaped(new THREE.SphereGeometry(0.009, 8, 6), sx * 0.038, 0, 0.107));
+    hairParts.push(shaped(new THREE.BoxGeometry(0.042, 0.01, 0.012), sx * 0.038, 0.046, 0.103, 1, 1, 1, -sx * 0.18));
+    skinParts.push(shaped(new THREE.SphereGeometry(0.022, 8, 8), sx * 0.103, 0, -0.005, 0.5, 1, 0.8));
   }
+  const merge = parts => { const g = mergeGeometries(parts, false); parts.forEach(p => p.dispose()); return g; };
+  // Augen und Pupillen haben ihren Ursprung auf Augenhöhe, damit das Zukneifen (scale.y) um die Augenmitte geschieht
+  const eyeMesh = new THREE.Mesh(merge(eyeParts), M.eye); eyeMesh.position.y = 0.02;
+  const pupilMesh = new THREE.Mesh(merge(pupilParts), M.pupil); pupilMesh.position.y = 0.02;
+  const eyes = [eyeMesh, pupilMesh];
   const nose = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), M.skinDark); nose.position.set(0, -0.004, 0.112); nose.scale.set(0.8, 1.1, 1);
   const guardM = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.017, 0.012), M.accent); guardM.position.set(0, -0.058, 0.102);
-  headG.add(skull, hair, nose, guardM);
+  headG.add(new THREE.Mesh(merge(skinParts), M.skin), new THREE.Mesh(merge(hairParts), M.hair), eyeMesh, pupilMesh, nose, guardM);
   const trunks = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.215, 0.32, 18), M.trunks); trunks.position.y = 0.86; root.add(trunks);
   const band = new THREE.Mesh(new THREE.CylinderGeometry(0.203, 0.203, 0.06, 18), M.accent); band.position.y = 1.0; root.add(band);
-  const limbs = {
-    upper: [new THREE.Mesh(limbGeo(0.052, 0.044), M.skin), new THREE.Mesh(limbGeo(0.052, 0.044), M.skin)],
-    fore: [new THREE.Mesh(limbGeo(0.044, 0.038), M.skin), new THREE.Mesh(limbGeo(0.044, 0.038), M.skin)],
-    thigh: [new THREE.Mesh(limbGeo(0.078, 0.06), M.skin), new THREE.Mesh(limbGeo(0.078, 0.06), M.skin)],
-    shin: [new THREE.Mesh(limbGeo(0.058, 0.045), M.skin), new THREE.Mesh(limbGeo(0.058, 0.045), M.skin)],
+  // Gliedmaßen (8), Gelenke (6), Schuhe und Socken je als ein instanzierter Körper: 4 statt 22 Draw-Calls
+  const inst = (geo, mat, n) => { const m = new THREE.InstancedMesh(geo, mat, n); m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); root.add(m); return m; };
+  const body = {
+    limb: inst(new THREE.CylinderGeometry(0.82, 1, 1, 10), M.skin, 8),
+    joint: inst(new THREE.SphereGeometry(1, 10, 8), M.skin, 6),
+    shoe: inst(new THREE.BoxGeometry(0.105, 0.075, 0.25), M.shoe, 2),
+    sock: inst(new THREE.CylinderGeometry(0.05, 0.05, 0.1, 10), M.sock, 2),
   };
-  const joints = [];
-  const jointGeo = new THREE.SphereGeometry(1, 10, 8);
-  function joint(r) { const j = new THREE.Mesh(jointGeo, M.skin); j.scale.setScalar(r); root.add(j); joints.push(j); return j; }
-  const jShoulder = [joint(0.06), joint(0.06)], jElbow = [joint(0.046), joint(0.046)], jKnee = [joint(0.06), joint(0.06)];
-  const gloves = [], shoes = [], socks = [];
+  const gloves = [];
   for (let h = 0; h < 2; h++) {
-    root.add(limbs.upper[h], limbs.fore[h], limbs.thigh[h], limbs.shin[h]);
     const gl = new THREE.Group();
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.078, 18, 14), M.glove[h]); ball.scale.set(0.95, 0.9, 1.18); ball.position.z = 0.012;
-    const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), M.glove[h]); thumb.position.set(h === 0 ? -0.055 : 0.055, 0.02, 0.0); thumb.scale.set(1, 1, 1.6);
+    const ballThumb = merge([
+      shaped(new THREE.SphereGeometry(0.078, 18, 14), 0, 0, 0.012, 0.95, 0.9, 1.18),
+      shaped(new THREE.SphereGeometry(0.03, 10, 8), h === 0 ? -0.055 : 0.055, 0.02, 0, 1, 1, 1.6),
+    ]);
     const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.052, 0.08, 14), M.cuff); cuff.rotation.x = Math.PI / 2; cuff.position.z = -0.085;
-    gl.add(ball, thumb, cuff);
+    gl.add(new THREE.Mesh(ballThumb, M.glove[h]), cuff);
     root.add(gl); gloves.push(gl);
-    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.075, 0.25), M.shoe);
-    const sock = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.1, 10), M.sock);
-    root.add(shoe, sock); shoes.push(shoe); socks.push(sock);
   }
   const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: BLOB, transparent: true, depthWrite: false, fog: false }));
   shadow.position.y = 0.006;
@@ -642,7 +687,7 @@ const opp = (() => {
   scene.add(hpBar);
 
   const O = {
-    root, torso, headG, M, eyes, pupils, gloves, shoes, socks, limbs, jShoulder, jElbow, jKnee, shL, shR, chest, belly, shadow, hpBar, hpFill,
+    root, torso, headG, M, eyes, gloves, body, shL, shR, chest, belly, shadow, hpBar, hpFill,
     st: OPPONENTS[0], idx: 0, scale: 1,
     pos: new V3(RING.x, 0, RING.z - 1.2), yaw: 0,
     hp: 100, maxHp: 100, downs: 0,
@@ -741,6 +786,12 @@ function resetStats() { stats = { pThrown: 0, pHits: 0, pHead: 0, pBody: 0, pBlo
 resetStats();
 let mode = 'menu';
 let time = 0;
+let paused = false, resumeReset = false;
+function setPaused(v) {
+  if (v === paused) return;
+  paused = v;
+  if (!v) resumeReset = true;   // nach der Pause keine Scheinschläge aus dem großen Positionssprung
+}
 
 // =====================================================================
 //  Handschuhe des Spielers
@@ -762,7 +813,7 @@ function makeGlove(hand) {
 const GLOVE_R = 0.085;
 const gloves = [0, 1].map(i => {
   const hand = i === 0 ? 'left' : 'right';
-  return { i, hand, ...makeGlove(hand), ctrl: null, active: false, init: false, armPos: new V3(), pos: new V3(), prev: new V3(), vel: new V3(), speed: 0, cool: 0, fast: false, punchId: 0, desk: { t: -1, tgt: new V3(), base: new V3() } };
+  return { i, hand, ...makeGlove(hand), ctrl: null, active: false, init: false, armPos: new V3(), pos: new V3(), prev: new V3(), vel: new V3(), speed: 0, peak: 0, cool: 0, fast: false, punchId: 0, desk: { t: -1, tgt: new V3(), base: new V3(), launch: new V3() } };
 });
 function buzz(gl, v, ms) {
   const h = gl && gl.ctrl && gl.ctrl.source && gl.ctrl.source.gamepad && gl.ctrl.source.gamepad.hapticActuators && gl.ctrl.source.gamepad.hapticActuators[0];
@@ -799,6 +850,9 @@ function updateGloves(dt) {
     if (!gl.init) { gl.prev.copy(gl.pos); gl.init = true; }
     gl.vel.subVectors(gl.pos, gl.prev).divideScalar(Math.max(dt, 1e-3));
     gl.speed = gl.vel.length();
+    // Kurzer Tracking-Verlust oder Neuzentrieren: unmöglich schnelle Sprünge nicht als Schlag werten
+    if (gl.speed > 14) { gl.prev.copy(gl.pos); gl.vel.set(0, 0, 0); gl.speed = 0; gl.peak = 0; gl.cool = 0.2; continue; }
+    gl.peak = Math.max(gl.speed, gl.peak - dt * 12);   // Schläge werden am Ende langsamer: die Spitze der letzten ~0,1 s zählt
     gl.cool -= dt;
     if (gl.speed > 2.0 && !gl.fast) { gl.fast = true; gl.punchId++; if (game.state === 'fight') stats.pThrown++; }
     else if (gl.speed < 0.9) gl.fast = false;
@@ -825,6 +879,7 @@ function segSphere(p0, p1, c, r) {
 // =====================================================================
 const CORNER = new V3(RING.x - 1.95, 0, RING.z - 1.95);
 function oppFighting() { return opp.mode === 'fight' || opp.mode === 'stunned'; }
+const inRing = p => Math.abs(p.x - RING.x) < RING_H - 0.12 && Math.abs(p.z - RING.z) < RING_H - 0.12;
 
 function startCombo() {
   const s = opp.st;
@@ -919,10 +974,10 @@ function oppAI(dt) {
       }
     }
     // Angriff
-    if (!O.action && !O.def && O.cool <= 0 && Math.hypot(P.x - O.pos.x, P.z - O.pos.z) < 0.95 * O.scale) startCombo();
+    if (!O.action && !O.def && O.cool <= 0 && inRing(P) && Math.hypot(P.x - O.pos.x, P.z - O.pos.z) < 0.95 * O.scale) startCombo();
   }
   if (O.def) { O.def.t += dt; if (O.def.t > O.def.dur) O.def = null; }
-  if (O.action && !oppFighting()) { O.action = null; O.queue = []; }
+  if (O.action && (!oppFighting() || (!inRing(P) && O.action.phase === 'windup'))) { O.action = null; O.queue = []; O.glow[0] = O.glow[1] = 0; }
 
   // Aktion fortschreiben
   const a = O.action;
@@ -938,7 +993,8 @@ function oppAI(dt) {
         if (K.zone === 'head') a.Tw.copy(P).addScaledVector(head.vel, 0.06);
         else chestPoint(a.Tw);
         a.aim.copy(a.Tw);
-        tA.subVectors(a.Tw, O.gW[a.hand]).setLength(0.07);
+        // Der Handschuh endet kurz vor dem Kopf statt hindurchzufliegen (kein Blick ins Handschuh-Innere)
+        tA.subVectors(a.Tw, O.gW[a.hand]).setLength(K.zone === 'head' ? -0.1 : -0.04);
         a.Tw.add(tA);
         O.glow[a.hand] = 0;
         stats.oThrown++;
@@ -1051,9 +1107,9 @@ function oppPose(dt) {
   for (let h = 0; h < 2; h++) {
     _sh.copy((h === 0 ? O.shL : O.shR).position).applyMatrix4(O.torso.matrix);
     solveIK(_sh, O.gC[h], 0.29, 0.27, POLE_ARM[h], _el, _wr);
-    placeLimb(O.limbs.upper[h], _sh, _el);
-    placeLimb(O.limbs.fore[h], _el, _wr);
-    O.jShoulder[h].position.copy(_sh); O.jElbow[h].position.copy(_el);
+    setLimb(h, _sh, _el, 0.052);
+    setLimb(2 + h, _el, _wr, 0.044);
+    setJoint(h, _sh, 0.06); setJoint(2 + h, _el, 0.046);
     tA.subVectors(_wr, _el).normalize();
     _gc.copy(_wr).addScaledVector(tA, 0.045);
     O.gloves[h].position.copy(_gc);
@@ -1093,13 +1149,14 @@ function oppPose(dt) {
     _hip.set(sx * 0.095, 0.9 + bob - O.crouch, 0);
     _an.copy(_ft); _an.y += 0.085; _an.z -= 0.02;
     solveIK(_hip, _an, 0.44, 0.44, POLE_LEG[i], _kn, _wr);
-    placeLimb(O.limbs.thigh[i], _hip, _kn);
-    placeLimb(O.limbs.shin[i], _kn, _wr);
-    O.jKnee[i].position.copy(_kn);
-    O.shoes[i].position.set(_wr.x, _wr.y - 0.05, _wr.z + 0.03);
-    O.shoes[i].rotation.set(0, i === 0 ? 0.12 : -0.4, 0);
-    O.socks[i].position.set(_wr.x, _wr.y, _wr.z);
+    setLimb(4 + i, _hip, _kn, 0.078);
+    setLimb(6 + i, _kn, _wr, 0.058);
+    setJoint(4 + i, _kn, 0.06);
+    _lq.setFromAxisAngle(UP, i === 0 ? 0.12 : -0.4);
+    _lm.compose(_lp.set(_wr.x, _wr.y - 0.05, _wr.z + 0.03), _lq, _ls.set(1, 1, 1)); O.body.shoe.setMatrixAt(i, _lm);
+    _lm.compose(_wr, _qI, _ls); O.body.sock.setMatrixAt(i, _lm);
   }
+  for (const k in O.body) O.body[k].instanceMatrix.needsUpdate = true;
   R.updateMatrixWorld(true);
   O.headG.getWorldPosition(O.headW);
   O.chest.getWorldPosition(O.chestW);
@@ -1130,7 +1187,7 @@ opp.counterNext = false;
 // =====================================================================
 function oppHitBy(gl, zone, point) {
   const O = opp;
-  let dmg = clamp(2.5 + (gl.speed - 1.5) * 2.0, 2.5, 9.5);
+  let dmg = clamp(2.5 + (gl.peak - 1.5) * 2.0, 2.5, 9.5);
   if (zone === 'body') dmg *= 0.75;
   const counter = O.open > 0;
   if (counter) dmg *= 1.4;
@@ -1169,19 +1226,18 @@ function oppHitBy(gl, zone, point) {
   if (O.hp <= 0) oppKnockdown();
 }
 
-const _targets = [];
+const _targets = [
+  { type: 'block', c: opp.gW[0], k: 0.062 }, { type: 'block', c: opp.gW[1], k: 0.062 },
+  { type: 'block', c: opp.foreW[0], k: 0.04 }, { type: 'block', c: opp.foreW[1], k: 0.04 },
+  { type: 'head', c: opp.headW, k: 0.125 }, { type: 'body', c: opp.chestW, k: 0.17 }, { type: 'body', c: opp.bellyW, k: 0.16 },
+];
 function checkPlayerPunches() {
   if (!oppFighting() || game.state !== 'fight') return;
   const O = opp, s = O.scale;
-  _targets.length = 0;
-  _targets.push(
-    { type: 'block', c: O.gW[0], r: 0.062 * s }, { type: 'block', c: O.gW[1], r: 0.062 * s },
-    { type: 'block', c: O.foreW[0], r: 0.04 * s }, { type: 'block', c: O.foreW[1], r: 0.04 * s },
-    { type: 'head', c: O.headW, r: 0.125 * s },
-    { type: 'body', c: O.chestW, r: 0.17 * s * O.st.gw }, { type: 'body', c: O.bellyW, r: 0.16 * s * (1 + O.st.belly * 0.2) },
-  );
+  for (const tg of _targets) tg.r = tg.k * s;
+  _targets[5].r *= O.st.gw; _targets[6].r *= 1 + O.st.belly * 0.2;
   for (const gl of gloves) {
-    if (!gl.active || gl.cool > 0 || gl.speed < 1.5) continue;
+    if (!gl.active || gl.cool > 0 || gl.peak < 1.5 || gl.speed < 0.6) continue;
     let best = null, bestT = 2;
     for (const tg of _targets) {
       tA.subVectors(tg.c, gl.prev);
@@ -1227,7 +1283,7 @@ function oppStrikeCheck() {
     const zoneHead = KIND[a.kind].zone === 'head';
     const tgt = zoneHead ? head.pos : chestPoint(tE);
     const d = gw.distanceTo(tgt);
-    if (d < (zoneHead ? 0.2 : 0.25)) playerHit(a, gw);
+    if (d < (zoneHead ? 0.23 : 0.26)) playerHit(a, gw);
     else {
       stats.dodged++;
       opp.open = 0.65;
@@ -1324,13 +1380,14 @@ function playerDown() {
   downUI.set(true);
 }
 function guardUp() {
-  let n = 0;
+  let n = 0, active = 0;
   for (const gl of gloves) {
     if (!gl.active) continue;
+    active++;
     tA.subVectors(gl.pos, head.pos);
     if (tA.length() < 0.4 && tA.dot(head.dir) > 0.02) n++;
   }
-  return n >= 2;
+  return active > 0 && n >= active;
 }
 
 let lastBumpT = -9;
@@ -1449,8 +1506,8 @@ function updatePlayerFx(dt) {
 //  Bildschirm-Modus
 // =====================================================================
 const desk = { keys: {}, yaw: 0, pitch: -0.05, lean: 0, duck: 0, pos: new V3(), ndc: new THREE.Vector2(0, 0.05) };
-const DESK_REST = [new V3(-0.16, -0.15, -0.34), new V3(0.16, -0.15, -0.34)];
-const DESK_GUARD = [new V3(-0.08, -0.05, -0.27), new V3(0.08, -0.05, -0.27)];
+const DESK_REST = [new V3(-0.21, -0.3, -0.24), new V3(0.21, -0.3, -0.24)];
+const DESK_GUARD = [new V3(-0.08, -0.05, -0.24), new V3(0.08, -0.05, -0.24)];
 const raycaster = new THREE.Raycaster();
 function deskPunch(i) {
   const gl = gloves[i];
@@ -1458,6 +1515,8 @@ function deskPunch(i) {
   raycaster.setFromCamera(desk.ndc, camera);
   const d = clamp(camera.getWorldPosition(tA).distanceTo(opp.headW) + 0.08, 0.3, 0.88);
   raycaster.ray.at(d, gl.desk.tgt);
+  // Abschuss nahe der Blicklinie: was unter dem Mauszeiger sichtbar ist, wird auch getroffen
+  raycaster.ray.at(0.14, gl.desk.launch);
   gl.desk.t = 0;
 }
 function updateDesk(dt) {
@@ -1486,12 +1545,13 @@ function updateDesk(dt) {
     if (gl.desk.t >= 0) {
       gl.desk.t += dt;
       const out = 0.1, hold = 0.05, back = 0.16, t = gl.desk.t;
-      let e;
-      if (t < out) e = 1 - Math.pow(1 - t / out, 2);
-      else if (t < out + hold) e = 1;
-      else if (t < out + hold + back) e = 1 - (t - out - hold) / back;
-      else { e = 0; gl.desk.t = -1; }
-      tB.lerp(gl.desk.tgt, e);
+      if (t < out) {
+        const e = 1 - Math.pow(1 - t / out, 2);
+        const u = 1 - e;   // Bogen vom Ruhepunkt über den Abschusspunkt zum Ziel
+        tB.multiplyScalar(u * u).addScaledVector(gl.desk.launch, 2 * u * e).addScaledVector(gl.desk.tgt, e * e);
+      } else if (t < out + hold) tB.copy(gl.desk.tgt);
+      else if (t < out + hold + back) tB.lerp(gl.desk.tgt, 1 - (t - out - hold) / back);
+      else gl.desk.t = -1;
     }
     gl.g.position.copy(tB);
     gl.g.quaternion.copy(tQ);
@@ -1514,6 +1574,8 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape') showMenu();
 });
 window.addEventListener('keyup', e => { desk.keys[e.key] = false; });
+window.addEventListener('blur', () => { desk.keys = {}; });
+document.addEventListener('visibilitychange', () => { if (mode === 'desk') setPaused(document.hidden); });
 
 function updateVRButtons() {
   for (const c of ctrls) {
@@ -1549,7 +1611,8 @@ function boardData() {
     const quote = stats.pThrown ? Math.round(100 * stats.pHits / Math.max(stats.pThrown, stats.pHits)) : 0;
     d.sub = `${game.result.detail} · Trefferquote ${quote} % · gedeckt ${stats.oBlocked} · ausgewichen ${stats.dodged}\n` +
       (mode === 'desk' ? 'Eingabetaste: Revanche · N: anderer Gegner' : 'A/X: Revanche · B/Y: anderer Gegner');
-  } else if (st === 'fight' && game.round === 1 && game.roundT > ROUND_TIME - 4) { d.msg = 'Kampf!'; }
+  } else if (st === 'fight' && !inRing(head.pos)) { d.msg = 'Zurück in den Ring!'; d.sub = 'Außerhalb der Seile greift dich niemand an'; }
+  else if (st === 'fight' && game.round === 1 && game.roundT > ROUND_TIME - 4) { d.msg = 'Kampf!'; }
   if (!vr && mode !== 'desk' && st === 'ready') d.sub = '';
   return d;
 }
@@ -1604,8 +1667,13 @@ async function startVR() {
   sound.resume();
   try {
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'layers'] });
-    session.addEventListener('end', () => { gloves.forEach(gl => { gl.active = false; gl.g.removeFromParent(); gl.ctrl = null; }); showMenu(); });
+    session.addEventListener('end', () => { setPaused(false); fps.check = false; gloves.forEach(gl => { gl.active = false; gl.g.removeFromParent(); gl.ctrl = null; }); showMenu(); });
+    // Quest-Menü geöffnet: Kampf anhalten
+    session.addEventListener('visibilitychange', () => setPaused(session.visibilityState !== 'visible'));
     await renderer.xr.setSession(session);
+    tryHighFrameRate(session);
+    const space = renderer.xr.getReferenceSpace();
+    if (space && space.addEventListener) space.addEventListener('reset', () => { resumeReset = true; });
     mode = 'vr';
     camera.rotation.set(0, 0, 0);
     rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
@@ -1616,6 +1684,25 @@ async function startVR() {
   } catch (err) {
     ui.status.textContent = 'VR konnte nicht gestartet werden: ' + (err && err.message ? err.message : err);
   }
+}
+const fps = { check: false, t: 0, n: 0, sum: 0 };
+function tryHighFrameRate(session) {
+  try {
+    const rates = session.supportedFrameRates ? Array.from(session.supportedFrameRates) : [];
+    if (rates.includes(90) && session.updateTargetFrameRate) {
+      session.updateTargetFrameRate(90).then(() => { fps.check = true; fps.t = 0; fps.n = 0; fps.sum = 0; }).catch(() => {});
+    }
+  } catch (e) { /* Bildrate nicht änderbar */ }
+}
+function watchFrameRate(realDt) {
+  if (!fps.check) return;
+  fps.t += realDt;
+  if (fps.t < 2) return;                  // Einschwingzeit
+  fps.n++; fps.sum += realDt;
+  if (fps.t < 6) return;
+  fps.check = false;
+  const session = renderer.xr.getSession();
+  if (session && fps.sum / fps.n > 1 / 80 && session.updateTargetFrameRate) session.updateTargetFrameRate(72).catch(() => {});
 }
 ui.btnDesk.addEventListener('click', startDesk);
 ui.btnVR.addEventListener('click', startVR);
@@ -1641,7 +1728,15 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 let boardT = 0, crowdT = 0;
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05) * game.timeScale;
+  const realDt = clock.getDelta();
+  watchFrameRate(realDt);
+  if (paused) { renderer.render(scene, camera); return; }
+  if (resumeReset) {
+    resumeReset = false;
+    gloves.forEach(gl => { gl.init = false; gl.peak = 0; gl.speed = 0; });
+    camera.getWorldPosition(head.prev);
+  }
+  const dt = Math.min(realDt, 0.05) * game.timeScale;
   time += dt;
   if (mode === 'menu') {
     camera.rotation.set(-0.04 + Math.sin(time * 0.1) * 0.02, Math.sin(time * 0.07) * 0.3, 0);
@@ -1682,7 +1777,7 @@ if (document.fonts && document.fonts.load) {
 }
 renderer.setAnimationLoop(frame);
 window.__boxBereit = true;
-window.__box = { THREE, game, opp, player, gloves, head, camera, desk, startFight, resetFight, selectOpponent, get stats() { return stats; }, get mode() { return mode; } };
+window.__box = { renderer, setPaused, get paused() { return paused; }, fps, THREE, game, opp, player, gloves, head, camera, desk, startFight, resetFight, selectOpponent, get stats() { return stats; }, get mode() { return mode; } };
 </script>
 </body>
 </html>
