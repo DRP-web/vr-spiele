@@ -25,12 +25,12 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--nacht); color: var(--pergament); font-family: var(--text); }
   #scene { position: fixed; inset: 0; display: block; touch-action: none; }
   #start {
-    position: fixed; inset: 0; display: flex; align-items: center;
+    position: fixed; inset: 0; display: flex; align-items: flex-start; overflow-y: auto;
     padding: clamp(1.5rem, 5vw, 5rem);
     background: linear-gradient(90deg, rgba(22,18,52,.92) 0%, rgba(22,18,52,.78) 38%, rgba(22,18,52,0) 72%);
   }
   #start.versteckt, #hud.versteckt { display: none; }
-  .tafel { max-width: 34rem; }
+  .tafel { max-width: 34rem; margin-block: auto; }
   h1 {
     font-family: var(--titel); font-weight: 400; color: #ffe2b0;
     font-size: clamp(2.4rem, 5.6vw, 4.4rem); line-height: 1.05; margin: 0 0 1.4rem;
@@ -60,7 +60,7 @@
   #hud .hilfe { background: rgba(22,18,52,.72); padding: .8rem 1rem; border-radius: 10px; max-width: 30rem; }
   #hud img { width: 170px; height: auto; border-radius: 8px; }
   @media (max-width: 640px) {
-    #start { background: rgba(22,18,52,.85); align-items: flex-end; }
+    #start { background: rgba(22,18,52,.85); }
     #hud img { width: 110px; }
   }
 </style>
@@ -72,7 +72,7 @@
 <main id="start">
   <div class="tafel">
     <h1>Die Akademie über den Wolken</h1>
-    <p class="einleitung">Dein erster Tag als Lehrling. Im Übungshof lernst du vier Runen, die du mit dem Zauberstab in die Luft zeichnest.</p>
+    <p class="einleitung">Dein erster Tag als Lehrling. Im Übungshof lernst du vier Runen, die du mit dem Zauberstab in die Luft zeichnest, und am Ende das Fliegen auf dem Besen.</p>
     <div class="knoepfe">
       <button id="btnVR" class="haupt" disabled>In VR starten</button>
       <button id="btnDesk" class="neben">Am Bildschirm üben</button>
@@ -84,12 +84,13 @@
       <dt>A oder X</dt><dd>Nächste Lektion</dd>
       <dt>B oder Y</dt><dd>Runenbuch ein- und ausblenden</dd>
       <dt>Stick</dt><dd>Nach links oder rechts drehen</dd>
+      <dt>Besen</dt><dd>Mit beiden Händen greifen, beide Abzüge halten. Neigen, drehen und schieben zum Lenken, einen Abzug loslassen zum Bremsen.</dd>
     </dl>
     <p class="zurueck"><a href="./">Zur Spielauswahl</a></p>
   </div>
 </main>
 <div id="hud" class="versteckt">
-  <div class="hilfe">Maustaste gedrückt halten und eine Rune zeichnen, loslassen zum Zaubern. Rechte Maustaste ziehen oder Pfeiltasten zum Umsehen. Leertaste wechselt zur nächsten Lektion, R blendet das Runenbuch um, Esc führt zurück.</div>
+  <div class="hilfe">Maustaste gedrückt halten und eine Rune zeichnen, loslassen zum Zaubern. Rechte Maustaste ziehen oder Pfeiltasten zum Umsehen. Leertaste wechselt zur nächsten Lektion, R blendet das Runenbuch um, Esc führt zurück. In der Flugstunde steigst du mit F auf den Besen.</div>
   <img id="hudBuch" alt="Runenbuch mit den vier Runen">
 </div>
 
@@ -265,6 +266,24 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpC = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion(), tmpM = new THREE.Matrix4();
 const az = (deg, r, y = 0) => new THREE.Vector3(Math.sin(deg * DEG) * r, y, -Math.cos(deg * DEG) * r);
+
+// Flugparcours: Ringmitten in Weltkoordinaten. Der letzte Ring sitzt im Torbogen des Übungshofs.
+const COURSE = [
+  [0, 4, -18], [-10, 7, -34], [-28, 4, -44], [-46, -2, -40], [-58, -6, -24], [-62, -3, -4],
+  [-54, 3, 16], [-40, 7, 30], [-24, 5, 44], [-14, 2, 62], [-6, -1, 80], [2, 0, 100],
+  [20, 6, 108], [38, 8, 96], [42, 4, 72], [34, 3, 50], [18, 3, 32], [6, 2.6, 18], [0, 2.4, 8.1],
+].map(p => new THREE.Vector3(p[0], p[1], p[2]));
+const BROOM_STAND = new THREE.Vector3(0.75, 0.95, -0.55);
+const COURSE_START = new THREE.Vector3(0.75, 1.6, -0.55);
+function distToCourse(p) {
+  const L = new THREE.Line3(), q = new THREE.Vector3(), pts = [COURSE_START, ...COURSE];
+  let m = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) { L.set(pts[i], pts[i + 1]); m = Math.min(m, L.closestPointToPoint(p, true, q).distanceTo(p)); }
+  return m;
+}
+// Kollisionskörper für den Flug (Zylinder für Inseln und Türme, Kugeln für Felsen)
+const colliders = { cyl: [], sph: [] };
+const addCyl = (x, z, r, y0, y1) => colliders.cyl.push({ x, z, r, y0, y1 });
 
 // =====================================================================
 //  Renderer, Szene, Kamera
@@ -643,6 +662,9 @@ scene.add(island);
   arch.position.set(0, 0, 8.1);
   island.add(arch);
 }
+addCyl(0, 0, 9.1, -0.8, 0);
+addCyl(0, 0, 8.0, -4.8, -0.8); addCyl(0, 0, 6.0, -9, -4.8); addCyl(0, 0, 3.5, -13, -9);
+addCyl(-1.7, 8.1, 0.38, 0, 3.6); addCyl(1.7, 8.1, 0.38, 0, 3.6);
 
 // ferne Inseln mit Türmen
 function farIsland(x, y, z, r, towers) {
@@ -669,6 +691,10 @@ function farIsland(x, y, z, r, towers) {
   }
   g.position.set(x, y, z);
   scene.add(g);
+  addCyl(x, z, r, y - 1, y + 1);
+  const hu = r * 1.6;
+  for (let k = 0; k < 3; k++) addCyl(x, z, r * 0.95 * (1 - (k + 0.5) / 3), y - 1 - (k + 1) * hu / 3, y - 1 - k * hu / 3);
+  for (const t of towers) addCyl(x + t[0], z + t[1], t[2] * 1.1, y + 1, y + 1 + t[3] * 1.38);
   return g;
 }
 farIsland(10, -8, 82, 24, [[-8, 2, 3.2, 26], [0, -4, 4.2, 40], [9, 3, 2.8, 22], [-2, 10, 3, 18], [14, -8, 2.2, 15]]);
@@ -680,11 +706,17 @@ const floaters = [];
 {
   const geo = new THREE.DodecahedronGeometry(1, 0);
   const mat = new THREE.MeshLambertMaterial({ color: 0x7d7088, flatShading: true });
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0, tries = 0; i < 14 && tries < 500; tries++) {
     const r = rand(14, 42), a = rand(0, Math.PI * 2);
+    const pos = new THREE.Vector3(Math.cos(a) * r, rand(-7, 9), Math.sin(a) * r);
+    const sc = new THREE.Vector3(rand(0.6, 2.4), rand(0.5, 1.6), rand(0.6, 2.2));
+    const rad = Math.max(sc.x, sc.y, sc.z);
+    if (distToCourse(pos) < rad + 6) continue;
+    i++;
     const m = new THREE.Mesh(geo, mat);
-    m.position.set(Math.cos(a) * r, rand(-7, 9), Math.sin(a) * r);
-    m.scale.set(rand(0.6, 2.4), rand(0.5, 1.6), rand(0.6, 2.2));
+    m.position.copy(pos);
+    m.scale.copy(sc);
+    colliders.sph.push({ c: m.position, r: rad * 0.85 });
     m.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3));
     m.userData = { y: m.position.y, ph: rand(0, 6), sp: rand(0.2, 0.5) };
     scene.add(m);
@@ -912,8 +944,10 @@ const LESSONS = [
     text: 'Zeichne ein Z. Der Blitz trifft den Kristall, auf den du zeigst. Zerschlage alle fünf, auch die hinter dir.' },
   { id: 'schild', rune: 'kreis', title: 'Die Schildrune', goal: 5,
     text: 'Der Wächter über dem Abgrund wirft Sturmkugeln. Zeichne einen Kreis, sobald eine anfliegt, und wehre fünf ab.' },
+  { id: 'flug', rune: null, title: 'Die Flugstunde', goal: 1,
+    text: 'Neben dir schwebt ein Besen. Greif ihn mit beiden Händen, eine vor der anderen, und halte beide Abzüge gedrückt. Neigen, drehen, schieben: so lenkst du durch alle Ringe.' },
   { id: 'frei', rune: null, title: 'Freies Training', goal: 0,
-    text: 'Alle vier Runen stehen dir offen. Laternen, Kisten, Kristalle und der Wächter kehren immer wieder zurück.' },
+    text: 'Alle Runen stehen dir offen, und der Besen wartet auf eine neue Bestzeit. Laternen, Kisten, Kristalle und der Wächter kehren immer wieder zurück.' },
 ];
 
 function lessonCount() {
@@ -923,6 +957,7 @@ function lessonCount() {
     case 'schwebe': return crates.filter(c => c.state === 'rising' || c.state === 'floating').length;
     case 'donner': return crystals.filter(c => !c.alive).length;
     case 'schild': return game.blocked;
+    case 'flug': return game.flightDone ? 1 : 0;
     default: return 0;
   }
 }
@@ -967,7 +1002,7 @@ const board = (() => {
     roundRect(g, 22, 22, 980, 532, 14); g.stroke();
     g.textBaseline = 'alphabetic';
     g.fillStyle = '#b9aee0'; g.font = `28px ${BODY_FONT}`;
-    g.fillText(L.id === 'frei' ? 'Nach den vier Lektionen' : `Lektion ${game.lesson + 1} von 4`, 60, 80);
+    g.fillText(L.id === 'frei' ? 'Nach den fünf Lektionen' : `Lektion ${game.lesson + 1} von 5`, 60, 80);
     g.fillStyle = '#ffd98a'; g.font = `56px ${TITLE_FONT}`;
     g.fillText(L.title, 60, 146);
     g.fillStyle = '#f3ead8'; g.font = `33px ${BODY_FONT}`;
@@ -980,20 +1015,30 @@ const board = (() => {
       g.fillStyle = '#b9aee0'; g.font = `26px ${BODY_FONT}`;
       g.fillText(`Rune: ${spell.shape}`, 812, 454);
       g.textAlign = 'left';
+    } else if (L.id === 'flug') {
+      drawBroomIcon(g, 812, 230, 210);
+      g.textAlign = 'center';
+      g.fillStyle = '#b9aee0'; g.font = `26px ${BODY_FONT}`;
+      g.fillText('Bestzeit', 812, 400);
+      g.fillStyle = '#ffd98a'; g.font = `44px ${TITLE_FONT}`;
+      g.fillText(fmtTime(flight.best), 812, 448);
+      g.textAlign = 'left';
     } else {
       g.textAlign = 'center';
       g.fillStyle = '#b9aee0'; g.font = `30px ${BODY_FONT}`;
-      g.fillText('Punkte', 812, 190);
-      g.fillStyle = '#ffd98a'; g.font = `120px ${TITLE_FONT}`;
-      g.fillText(String(game.score), 812, 320);
+      g.fillText('Punkte', 812, 170);
+      g.fillStyle = '#ffd98a'; g.font = `110px ${TITLE_FONT}`;
+      g.fillText(String(game.score), 812, 290);
+      g.fillStyle = '#b9aee0'; g.font = `26px ${BODY_FONT}`;
+      g.fillText(`Bestzeit Besen: ${fmtTime(flight.best)}`, 812, 360);
       g.textAlign = 'left';
     }
     if (game.lessonDone) {
       g.fillStyle = '#9cffd8'; g.font = `46px ${TITLE_FONT}`;
       g.fillText('Geschafft!', 60, 478);
       g.fillStyle = '#d8d0ee'; g.font = `27px ${BODY_FONT}`;
-      g.fillText(game.lesson < 3 ? 'Gleich beginnt die nächste Lektion.' : 'Gleich beginnt das freie Training.', 300, 476);
-    } else if (L.goal) {
+      g.fillText(game.lesson < 4 ? 'Gleich beginnt die nächste Lektion.' : 'Gleich beginnt das freie Training.', 300, 476);
+    } else if (L.goal && L.id !== 'flug') {
       const n = lessonCount();
       for (let i = 0; i < L.goal; i++) {
         g.beginPath(); g.arc(78 + i * 46, 466, 15, 0, Math.PI * 2);
@@ -1002,9 +1047,10 @@ const board = (() => {
       }
     }
     g.fillStyle = '#9f95c8'; g.font = `24px ${BODY_FONT}`;
+    const flugHinweis = L.id === 'flug' || L.id === 'frei';
     g.fillText(mode === 'desk'
-      ? 'Maustaste halten und zeichnen, loslassen zum Zaubern. Leertaste: nächste Lektion.'
-      : 'Abzug halten und zeichnen, loslassen zum Zaubern. A/X: nächste Lektion, B/Y: Runenbuch.', 60, 532);
+      ? (flugHinweis ? 'F: Besen besteigen oder landen. Pfeile lenken, W/S Tempo, A/D seitwärts, Q/E runter/hoch.' : 'Maustaste halten und zeichnen, loslassen zum Zaubern. Leertaste: nächste Lektion.')
+      : (flugHinweis ? 'Besen: beide Abzüge halten. Im Flug landet A/X sofort, B/Y schaltet den Tunnelblick.' : 'Abzug halten und zeichnen, loslassen zum Zaubern. A/X: nächste Lektion, B/Y: Runenbuch.'), 60, 532);
     tex.needsUpdate = true;
   }
   return { g3, crown, draw };
@@ -1124,6 +1170,8 @@ const sound = (() => {
   B.zisch = mk(0.55, (d, n) => { let lp = 0; for (let i = 0; i < n; i++) { const t = i / sr; lp += (0.2 * Math.exp(-t * 6) + 0.01) * (N() - lp); d[i] = lp * Math.exp(-t * 5); } });
   B.ploff = mk(0.45, (d, n) => { let lp = 0, ph = 0; for (let i = 0; i < n; i++) { const t = i / sr; ph += TAU * (130 - 80 * t) / sr; lp += 0.04 * (N() - lp); d[i] = Math.sin(ph) * Math.exp(-t * 12) + lp * Math.exp(-t * 9) * 2; } });
   B.rauschen = mk(1.0, (d, n) => { for (let i = 0; i < n; i++) d[i] = N(); });
+  B.ring = mk(0.9, (d, n) => { for (let i = 0; i < n; i++) { const t = i / sr; d[i] = bell(t, 1046.5, 5) + (t > 0.06 ? bell(t - 0.06, 1568, 6) * 0.7 : 0); } });
+  let windNode = null;
 
   let drawNode = null;
   return {
@@ -1155,6 +1203,27 @@ const sound = (() => {
       const now = ctx.currentTime;
       drawNode.gain.gain.setTargetAtTime(Math.min(0.22, v * 0.12), now, 0.04);
       drawNode.f.frequency.setTargetAtTime(1600 + Math.min(3, v) * 1400, now, 0.05);
+    },
+    windStart() {
+      if (ctx.state !== 'running' || windNode) return;
+      const src = ctx.createBufferSource(); src.buffer = B.rauschen; src.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 300; f.Q.value = 0.7;
+      const gain = ctx.createGain(); gain.gain.value = 0;
+      src.connect(f); f.connect(gain); gain.connect(listener.getInput());
+      src.start();
+      windNode = { src, f, gain };
+    },
+    windSpeed(v) {
+      if (!windNode) return;
+      const now = ctx.currentTime;
+      windNode.gain.gain.setTargetAtTime(Math.min(0.4, 0.03 + v * 0.025), now, 0.1);
+      windNode.f.frequency.setTargetAtTime(250 + v * 110, now, 0.1);
+    },
+    windStop() {
+      if (!windNode) return;
+      const n = windNode; windNode = null;
+      n.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.15);
+      setTimeout(() => { try { n.src.stop(); } catch (e) { /* schon gestoppt */ } }, 800);
     },
     drawStop() {
       if (!drawNode) return;
@@ -1361,7 +1430,7 @@ function updateFx(dt) {
 // =====================================================================
 //  Spielablauf
 // =====================================================================
-const game = { lesson: 0, lessonDone: false, doneT: 0, score: 0, blocked: 0, orbT: 0, free: false, lastCount: -1, lanternT: 0 };
+const game = { timeScale: 1, flightDone: false, lesson: 0, lessonDone: false, doneT: 0, score: 0, blocked: 0, orbT: 0, free: false, lastCount: -1, lanternT: 0 };
 const head = { pos: new THREE.Vector3(0, 1.6, 0), dir: new THREE.Vector3(0, 0, -1) };
 let mode = 'menu';   // 'menu' | 'desk' | 'vr'
 let time = 0;
@@ -1374,6 +1443,7 @@ function onScore(n, pos) {
 }
 
 function startLesson(i) {
+  if (flight.active) endFlightNow('abbruch');
   game.lesson = i;
   game.lessonDone = false;
   game.free = LESSONS[i].id === 'frei';
@@ -1388,8 +1458,13 @@ function startLesson(i) {
   if (id === 'donner' || game.free) crystals.forEach(c => c.spawn());
   if (i < 2) crystals.forEach(c => c.hide());
   if (id === 'schild' || game.free) guardian.show();
-  if (i < 3) guardian.hide();
+  else guardian.hide();
   if (game.free) game.score = 0;
+  game.flightDone = false;
+  const broomHere = id === 'flug' || game.free;
+  broom.g.visible = broomHere;
+  course.setVisible(broomHere);
+  course.reset();
   board.draw();
 }
 
@@ -1419,7 +1494,7 @@ function updateGame(dt) {
     if (game.doneT <= 0) startLesson(Math.min(game.lesson + 1, LESSONS.length - 1));
   }
   // Wächter wirft
-  const throwing = guardian.active && guardian.appearT >= 1 && ((L.id === 'schild' && !game.lessonDone) || game.free);
+  const throwing = !flight.active && guardian.active && guardian.appearT >= 1 && ((L.id === 'schild' && !game.lessonDone) || game.free);
   if (throwing && fx.orbs.length < (game.free ? 2 : 1)) {
     game.orbT -= dt;
     if (game.orbT <= 0) { fireOrb(); game.orbT = game.free ? rand(4, 7) : 1.8; }
@@ -1577,7 +1652,7 @@ const ctrls = [0, 1].map(i => {
   const grip = renderer.xr.getControllerGrip(i);
   const hand = renderer.xr.getHand(i);
   rig.add(ray, grip, hand);
-  const c = { i, ray, grip, hand, source: null, prev4: false, prev5: false, stickReady: true };
+  const c = { i, ray, grip, hand, source: null, prev4: false, prev5: false, stickReady: true, grabbing: false, squeezing: false, selecting: false };
   ray.addEventListener('connected', e => {
     c.source = e.data;
     const ownerIsRight = wandOwner && wandOwner.source && wandOwner.source.handedness === 'right';
@@ -1586,15 +1661,30 @@ const ctrls = [0, 1].map(i => {
   });
   ray.addEventListener('disconnected', () => {
     c.source = null;
+    if (c.grabbing) { c.grabbing = false; onGrabChange(); }
     if (stroke && stroke.ctrl === c) { stroke = null; sound.drawStop(); }
   });
   ray.addEventListener('selectstart', () => {
     if (mode !== 'vr') return;
+    c.selecting = true;
+    if (flight.active || (broomAvailable() && nearBroom(c))) { c.grabbing = true; onGrabChange(); return; }
     if (wandOwner !== c) setWandOwner(c);
     beginStroke({ kind: 'vr', ctrl: c });
   });
   ray.addEventListener('selectend', () => {
+    c.selecting = false;
+    if (c.grabbing && !c.squeezing) { c.grabbing = false; onGrabChange(); return; }
     if (stroke && stroke.ctrl === c) endStroke();
+  });
+  // Die Greiftasten funktionieren am Besen genauso wie die Abzüge
+  ray.addEventListener('squeezestart', () => {
+    if (mode !== 'vr') return;
+    c.squeezing = true;
+    if (flight.active || (broomAvailable() && nearBroom(c))) { c.grabbing = true; onGrabChange(); }
+  });
+  ray.addEventListener('squeezeend', () => {
+    c.squeezing = false;
+    if (c.grabbing && !c.selecting) { c.grabbing = false; onGrabChange(); }
   });
   return c;
 });
@@ -1606,12 +1696,12 @@ function setWandOwner(c) {
   wand.position.set(0, 0, 0);
   wand.quaternion.identity();
   wandTip.position.set(0, 0, -0.322);
-  wand.visible = !(c.source && c.source.hand);
+  wand.visible = !(c.source && c.source.hand) && !flight.active;
   placeBook();
 }
 function placeBook() {
   const other = ctrls.find(o => o !== wandOwner && o.source);
-  if (other) { other.grip.add(book); book.visible = bookWanted && !other.source.hand; }
+  if (other) { other.grip.add(book); book.visible = bookWanted && !other.source.hand && !flight.active; }
   else { if (book.parent) book.parent.remove(book); book.visible = false; }
 }
 
@@ -1629,10 +1719,14 @@ function buzz(c, intensity, ms) {
 }
 function buzzAll(intensity, ms) { ctrls.forEach(c => buzz(c, intensity, ms)); }
 
-function snapTurn(angle) {
+function rotateRig(angle) {
   camera.getWorldPosition(tmpA);
   rig.position.sub(tmpA).applyAxisAngle(UP, angle).add(tmpA);
   rig.rotation.y += angle;
+}
+function snapTurn(angle) {
+  rotateRig(angle);
+  if (flight.active) flight.heading += angle;
 }
 
 function updateVR(dt) {
@@ -1640,8 +1734,13 @@ function updateVR(dt) {
     const gp = c.source && c.source.gamepad;
     if (!gp) continue;
     const b4 = !!(gp.buttons[4] && gp.buttons[4].pressed), b5 = !!(gp.buttons[5] && gp.buttons[5].pressed);
-    if (b4 && !c.prev4) nextLesson();
-    if (b5 && !c.prev5) { bookWanted = !bookWanted; placeBook(); }
+    if (b4 && !c.prev4) { if (flight.active) land('abbruch'); else nextLesson(); }
+    if (b5 && !c.prev5) {
+      if (flight.active) {
+        flight.vignette = !flight.vignette;
+        floatText(flight.vignette ? 'Tunnelblick an' : 'Tunnelblick aus', tmpA.copy(head.dir).multiplyScalar(1.2).add(head.pos), '#d8d0ee', 0.05, BODY_FONT);
+      } else { bookWanted = !bookWanted; placeBook(); }
+    }
     c.prev4 = b4; c.prev5 = b5;
     const sx = gp.axes.length > 2 ? gp.axes[2] : 0;
     if (Math.abs(sx) > 0.7 && c.stickReady) { snapTurn(sx > 0 ? -30 * DEG : 30 * DEG); c.stickReady = false; }
@@ -1674,7 +1773,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (mode !== 'desk') return;
   sound.resume();
   if (e.button === 2 || e.shiftKey) { desk.look = { x: e.clientX, y: e.clientY }; return; }
-  if (e.button !== 0) return;
+  if (e.button !== 0 || flight.active) return;
   renderer.domElement.setPointerCapture(e.pointerId);
   beginStroke({ kind: 'desk', ctrl: null });
   stroke.ndcSum = new THREE.Vector2(); stroke.ndcN = 0;
@@ -1709,16 +1808,20 @@ window.addEventListener('keydown', e => {
   if (mode !== 'desk') return;
   desk.keys[e.key] = true;
   if (e.key === ' ') { e.preventDefault(); nextLesson(); }
+  if ((e.key === 'f' || e.key === 'F') && !e.repeat) { if (flight.active) land('abbruch'); else if (broomAvailable()) mountBroom(); }
   if (e.key === 'r' || e.key === 'R') { const img = document.getElementById('hudBuch'); img.style.visibility = img.style.visibility === 'hidden' ? 'visible' : 'hidden'; }
   if (e.key === 'Escape') showMenu();
 });
 window.addEventListener('keyup', e => { desk.keys[e.key] = false; });
 
 function updateDesk(dt) {
-  if (desk.keys.ArrowLeft) desk.yaw += dt * 1.4;
-  if (desk.keys.ArrowRight) desk.yaw -= dt * 1.4;
-  if (desk.keys.ArrowUp) desk.pitch = clamp(desk.pitch + dt * 1.0, -1.2, 1.2);
-  if (desk.keys.ArrowDown) desk.pitch = clamp(desk.pitch - dt * 1.0, -1.2, 1.2);
+  if (!flight.active) {
+    if (desk.keys.ArrowLeft) desk.yaw += dt * 1.4;
+    if (desk.keys.ArrowRight) desk.yaw -= dt * 1.4;
+    if (desk.keys.ArrowUp) desk.pitch = clamp(desk.pitch + dt * 1.0, -1.2, 1.2);
+    if (desk.keys.ArrowDown) desk.pitch = clamp(desk.pitch - dt * 1.0, -1.2, 1.2);
+  }
+  wand.visible = !flight.active;
   camera.rotation.set(desk.pitch, desk.yaw, 0);
   // Stab zeigt auf die Zeichenspitze
   let targetQ = DESK_WAND_REST;
@@ -1732,6 +1835,519 @@ function updateDesk(dt) {
   }
   wand.quaternion.slerp(targetQ, Math.min(1, dt * 14));
   wandGlow.material.opacity = stroke ? 1 : 0.6 + Math.sin(time * 3) * 0.15;
+}
+
+// =====================================================================
+//  Besenflug
+// =====================================================================
+const broom = (() => {
+  const g = new THREE.Group();
+  const wood = new THREE.MeshLambertMaterial({ color: 0x7a5034 });
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.022, 1.45, 10), wood);
+  handle.rotation.x = Math.PI / 2; handle.position.z = -0.15;
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), wood); knob.position.z = -0.875;
+  const brass = new THREE.MeshLambertMaterial({ color: 0xc9a25a, emissive: 0x3a2a10 });
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.07, 12), brass);
+  band.rotation.x = Math.PI / 2; band.position.z = 0.6;
+  const straw = new THREE.MeshLambertMaterial({ color: 0xc8a060, side: THREE.DoubleSide, flatShading: true });
+  const outer = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.64, 16, 1, true), straw);
+  outer.rotation.x = -Math.PI / 2; outer.position.z = 0.93;
+  const inner = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.6, 12, 1, true), new THREE.MeshLambertMaterial({ color: 0x9a7440, side: THREE.DoubleSide }));
+  inner.rotation.x = -Math.PI / 2; inner.position.z = 0.92;
+  const tip = new THREE.Object3D(); tip.position.z = -0.9;
+  const aura = glowSprite(PAL.gold, 1.6, 0.3); aura.position.z = -0.1;
+  g.add(handle, knob, band, outer, inner, tip, aura);
+  g.position.copy(BROOM_STAND);
+  g.visible = false;
+  scene.add(g);
+  return { g, tip, aura, handleA: new THREE.Vector3(0, 0, -0.85), handleB: new THREE.Vector3(0, 0, 0.55) };
+})();
+
+function drawBroomIcon(g, cx, cy, size) {
+  g.save();
+  g.translate(cx, cy); g.rotate(-0.5);
+  g.shadowColor = '#ffd98a'; g.shadowBlur = size * 0.08;
+  g.strokeStyle = '#d7a46a'; g.lineCap = 'round'; g.lineWidth = size * 0.045;
+  g.beginPath(); g.moveTo(-size * 0.5, 0); g.lineTo(size * 0.22, 0); g.stroke();
+  g.fillStyle = '#ffd98a';
+  g.fillRect(size * 0.2, -size * 0.05, size * 0.06, size * 0.1);
+  g.strokeStyle = '#ffcf7a'; g.lineWidth = size * 0.018;
+  for (let k = -5; k <= 5; k++) { g.beginPath(); g.moveTo(size * 0.26, k * size * 0.006); g.lineTo(size * 0.56, k * size * 0.03); g.stroke(); }
+  g.restore();
+}
+
+const course = (() => {
+  const geo = new THREE.TorusGeometry(2.2, 0.09, 8, 56);
+  const geoSmall = new THREE.TorusGeometry(0.95, 0.07, 8, 40);
+  const rings = COURSE.map((p, i) => {
+    const prev = i === 0 ? COURSE_START : COURSE[i - 1];
+    const next = i < COURSE.length - 1 ? COURSE[i + 1] : null;
+    const n = next ? next.clone().sub(prev).normalize() : new THREE.Vector3(0, 0, -1);
+    const last = i === COURSE.length - 1;
+    const mat = new THREE.MeshBasicMaterial({ color: PAL.gold, transparent: true, opacity: 0.3, fog: false, depthWrite: false });
+    const mesh = new THREE.Mesh(last ? geoSmall : geo, mat);
+    mesh.position.copy(p);
+    mesh.lookAt(tmpA.copy(p).add(n));
+    mesh.visible = false;
+    scene.add(mesh);
+    return { mesh, mat, p, n, radius: last ? 1.2 : 2.5, state: 'wait', t: 0 };
+  });
+  const glow = glowSprite(PAL.gold, 6, 0.22);
+  glow.visible = false;
+  scene.add(glow);
+  return {
+    rings, glow, current: 0, visible: false,
+    reset() {
+      this.current = 0;
+      for (const r of this.rings) { r.state = 'wait'; r.t = 0; r.mesh.scale.setScalar(1); r.mesh.visible = this.visible; }
+    },
+    setVisible(v) {
+      this.visible = v;
+      for (const r of this.rings) r.mesh.visible = v && r.state !== 'passed';
+      this.glow.visible = v;
+    },
+    update(dt, time) {
+      if (!this.visible) return;
+      this.rings.forEach((r, i) => {
+        if (r.state === 'passed') {
+          r.t += dt;
+          r.mesh.scale.setScalar(1 + r.t * 1.6);
+          r.mat.opacity = Math.max(0, 0.9 * (1 - r.t / 0.5));
+          if (r.t > 0.5) r.mesh.visible = false;
+          return;
+        }
+        const rel = i - this.current;
+        r.mat.opacity = rel === 0 ? 0.95 : rel === 1 ? 0.55 : 0.28;
+        r.mat.color.setHex(rel === 0 ? 0xfff0c0 : PAL.gold);
+        r.mesh.scale.setScalar(rel === 0 ? 1 + Math.sin(time * 4) * 0.04 : 1);
+      });
+      const a = this.rings[this.current];
+      if (a) { this.glow.visible = true; this.glow.position.copy(a.p); this.glow.scale.setScalar(a.radius * 2.4 + Math.sin(time * 3) * 0.4); }
+      else this.glow.visible = false;
+    },
+  };
+})();
+
+// Instrumententafel und Richtungspfeil vorn am Besen
+const dash = (() => {
+  const cv = makeCanvas(512, 176), g = cv.getContext('2d');
+  const tex = canvasTex(cv);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.103), new THREE.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: false, fog: false, depthTest: false, depthWrite: false }));
+  mesh.renderOrder = 30;
+  mesh.visible = false;
+  scene.add(mesh);
+  function draw() {
+    g.clearRect(0, 0, 512, 176);
+    g.fillStyle = 'rgba(23,20,47,0.85)'; roundRect(g, 4, 4, 504, 168, 24); g.fill();
+    g.strokeStyle = 'rgba(255,217,138,0.55)'; g.lineWidth = 3; roundRect(g, 12, 12, 488, 152, 18); g.stroke();
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillStyle = '#b9aee0'; g.font = `26px ${BODY_FONT}`;
+    g.fillText('Ring', 36, 54); g.fillText('Zeit', 290, 54);
+    g.fillStyle = '#ffd98a'; g.font = `54px ${TITLE_FONT}`;
+    g.fillText(`${Math.min(course.current + 1, course.rings.length)}/${course.rings.length}`, 32, 116);
+    g.fillText(fmtTime(flight.time + flight.penalty), 286, 116);
+    g.fillStyle = 'rgba(255,255,255,0.13)'; roundRect(g, 36, 136, 440, 14, 7); g.fill();
+    g.fillStyle = flight.holding ? '#9cffd8' : '#ffb3c0';
+    roundRect(g, 36, 136, Math.max(14, 440 * Math.min(1, flight.speed / 14)), 14, 7); g.fill();
+    tex.needsUpdate = true;
+  }
+  return { mesh, draw };
+})();
+const arrow = (() => {
+  const g = new THREE.Group();
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.14, 12).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd98a, fog: false, depthTest: false }));
+  cone.renderOrder = 31;
+  g.add(cone, glowSprite(PAL.gold, 0.2, 0.6));
+  g.visible = false;
+  scene.add(g);
+  return g;
+})();
+
+// Tunnelblick gegen Übelkeit und Abblende für Ortswechsel (beide fest vor den Augen)
+const vignette = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), new THREE.ShaderMaterial({
+  uniforms: { uStrength: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform float uStrength; varying vec2 vUv;
+    void main() {
+      float r = length(vUv - 0.5) * 2.0;
+      float inner = mix(0.95, 0.42, uStrength);
+      float a = smoothstep(inner, inner + 0.35, r) * min(1.0, uStrength * 1.6);
+      gl_FragColor = vec4(0.03, 0.025, 0.07, a);
+    }`,
+  transparent: true, depthTest: false, depthWrite: false,
+}));
+vignette.position.z = -0.2;
+vignette.renderOrder = 1000;
+vignette.visible = false;
+vignette.frustumCulled = false;
+camera.add(vignette);
+
+const fade = (() => {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 8), new THREE.MeshBasicMaterial({ color: 0x0b0918, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false, fog: false }));
+  mesh.renderOrder = 1001;
+  mesh.visible = false;
+  mesh.frustumCulled = false;
+  camera.add(mesh);
+  let phase = null, cb = null, op = 0;
+  return {
+    run(fn) { if (phase) return false; cb = fn; phase = 'out'; mesh.visible = true; return true; },
+    update(dt) {
+      if (!phase) return;
+      if (phase === 'out') {
+        op = Math.min(1, op + dt / 0.3);
+        if (op >= 1) { const f = cb; cb = null; phase = 'in'; if (f) f(); }
+      } else {
+        op = Math.max(0, op - dt / 0.45);
+        if (op <= 0) { phase = null; mesh.visible = false; }
+      }
+      mesh.material.opacity = op;
+    },
+  };
+})();
+
+function loadBest() { try { const v = parseFloat(localStorage.getItem('akademie-bestzeit')); return Number.isFinite(v) ? v : null; } catch (e) { return null; } }
+function saveBest(v) { try { localStorage.setItem('akademie-bestzeit', String(v)); } catch (e) { /* Speicher nicht verfügbar */ } }
+function fmtTime(t) {
+  if (t === null || t === undefined) return '–';
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
+}
+const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
+const shape = (v, dead, full) => Math.sign(v) * clamp((Math.abs(v) - dead) / (full - dead), 0, 1);
+
+const flight = {
+  active: false, holding: false, landing: false, front: null, rear: null,
+  heading: 0, yaw0: 0, pitch0: 0, roll0: 0, c0: new THREE.Vector3(),
+  speed: 0, yawRate: 0, vy: 0, c: { turn: 0, pitch: 0, strafe: 0, lift: 0, throttle: 0 },
+  time: 0, penalty: 0, running: false, finishT: 0,
+  prevHead: new THREE.Vector3(), lastSafe: new THREE.Vector3(),
+  vignette: true, vig: 0, bumpT: 0, hapT: 0, dashT: 0, hintT: 0, autopilot: false,
+  best: loadBest(),
+};
+const broomAvailable = () => { const id = LESSONS[game.lesson].id; return (id === 'flug' || id === 'frei') && !game.lessonDone && broom.g.visible; };
+
+const _ha = new THREE.Vector3(), _hb = new THREE.Vector3(), _hp = new THREE.Vector3(), _hq = new THREE.Vector3(), _hl = new THREE.Line3();
+function nearBroom(c) {
+  broom.g.updateWorldMatrix(true, false);
+  _ha.copy(broom.handleA).applyMatrix4(broom.g.matrixWorld);
+  _hb.copy(broom.handleB).applyMatrix4(broom.g.matrixWorld);
+  _hl.set(_ha, _hb);
+  c.ray.getWorldPosition(_hp);
+  return _hl.closestPointToPoint(_hp, true, _hq).distanceTo(_hp) < 0.32;
+}
+function grabbers() { return ctrls.filter(c => c.grabbing && c.source); }
+
+function onGrabChange() {
+  const g = grabbers();
+  if (!flight.active) {
+    if (g.length >= 2 && broomAvailable()) mountBroom();
+    else if (g.length === 1) {
+      buzz(g[0], 0.35, 50);
+      if (time - flight.hintT > 2.5) {
+        flight.hintT = time;
+        broom.g.getWorldPosition(tmpA);
+        floatText('Jetzt mit der zweiten Hand', tmpA.add(tmpB.set(0, 0.35, 0)), '#ffd98a', 0.045, BODY_FONT);
+      }
+    }
+  } else if (!flight.landing) {
+    if (g.length >= 2) { calibrateVR(); flight.holding = true; buzzAll(0.3, 40); }
+    else flight.holding = false;
+  }
+}
+
+const _rb = { center: new THREE.Vector3(), axis: new THREE.Vector3(), R: new THREE.Vector3(), U: new THREE.Vector3(), up: new THREE.Vector3() };
+// Liest die Besenlage aus beiden Händen (im Koordinatensystem des Spielers)
+function readBroomVR() {
+  const f = flight.front, r = flight.rear;
+  if (!f || !r || !f.source || !r.source) return null;
+  const pf = f.ray.position, pr = r.ray.position;
+  _rb.axis.subVectors(pf, pr);
+  const len = _rb.axis.length();
+  if (len < 0.06) return null;
+  _rb.axis.divideScalar(len);
+  _rb.center.addVectors(pf, pr).multiplyScalar(0.5);
+  const yaw = Math.atan2(-_rb.axis.x, -_rb.axis.z);
+  const pitch = Math.asin(clamp(_rb.axis.y, -1, 1));
+  _rb.R.crossVectors(_rb.axis, UP);
+  if (_rb.R.lengthSq() < 1e-4) _rb.R.set(1, 0, 0);
+  _rb.R.normalize();
+  _rb.U.crossVectors(_rb.R, _rb.axis).normalize();
+  let sx = 0, sy = 0;
+  for (const c of [f, r]) {
+    _rb.up.set(0, 1, 0).applyQuaternion(c.ray.quaternion);
+    const a = Math.atan2(_rb.up.dot(_rb.R), _rb.up.dot(_rb.U));
+    sx += Math.cos(a); sy += Math.sin(a);
+  }
+  return { center: _rb.center, axis: _rb.axis, yaw, pitch, roll: Math.atan2(sy, sx), len };
+}
+
+// Die Lage beim Greifen gilt als neutral
+function calibrateVR() {
+  const g = grabbers();
+  if (g.length < 2) return false;
+  tmpA.set(0, 0, -1).applyQuaternion(camera.quaternion); tmpA.y = 0; tmpA.normalize();
+  const [a, b] = g;
+  if (a.ray.position.dot(tmpA) >= b.ray.position.dot(tmpA)) { flight.front = a; flight.rear = b; }
+  else { flight.front = b; flight.rear = a; }
+  const s = readBroomVR();
+  if (!s) return false;
+  flight.yaw0 = s.yaw; flight.pitch0 = s.pitch; flight.roll0 = s.roll;
+  flight.c0.copy(s.center);
+  return true;
+}
+
+function vrControls(out) {
+  const s = flight.holding ? readBroomVR() : null;
+  if (!s) return false;
+  const d = tmpA.copy(s.center).sub(flight.c0);
+  const cy = Math.cos(flight.yaw0), sy = Math.sin(flight.yaw0);
+  const dx = d.x * cy - d.z * sy;         // nach rechts
+  const dz = -d.x * sy - d.z * cy;        // nach vorn
+  out.turn = clamp(shape(wrapA(s.yaw - flight.yaw0), 5 * DEG, 32 * DEG) - 0.7 * shape(wrapA(s.roll - flight.roll0), 14 * DEG, 50 * DEG), -1, 1);
+  out.pitch = shape(s.pitch - flight.pitch0, 5 * DEG, 35 * DEG);
+  out.strafe = shape(dx, 0.05, 0.25);
+  out.lift = shape(d.y, 0.05, 0.25);
+  out.throttle = shape(dz, 0.05, 0.22);
+  // Besen liegt sichtbar zwischen den Händen
+  tmpM.lookAt(s.center, tmpB.copy(s.center).add(s.axis), UP);
+  broom.g.quaternion.setFromRotationMatrix(tmpM);
+  broom.g.position.copy(s.center);
+  return true;
+}
+
+function deskControls(out) {
+  if (flight.autopilot) autoControls(out);
+  else {
+    const k = desk.keys;
+    out.turn = (k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0);
+    out.pitch = (k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0);
+    out.strafe = (k.d || k.D ? 1 : 0) - (k.a || k.A ? 1 : 0);
+    out.lift = (k.e || k.E ? 1 : 0) - (k.q || k.Q ? 1 : 0);
+    out.throttle = (k.w || k.W ? 1 : 0) - (k.s || k.S ? 1 : 0);
+  }
+  // Besen unten im Bild, neigt sich mit
+  const ly = flight.heading - rig.rotation.y;
+  broom.g.position.set(-Math.sin(ly) * 0.5, 1.05, -Math.cos(ly) * 0.5);
+  broom.g.rotation.set(flight.c.pitch * 0.35, ly + flight.c.turn * 0.25, flight.c.turn * 0.3, 'YXZ');
+  return true;
+}
+
+// Autopilot (nur für automatische Tests): lenkt auf den nächsten Ring zu
+function autoControls(out) {
+  const r = course.rings[course.current];
+  const target = r ? r.p : tmpC.set(0, 1.6, 0);
+  const to = tmpA.copy(target).sub(head.pos);
+  const d = wrapA(Math.atan2(-to.x, -to.z) - flight.heading);
+  out.turn = clamp(d * 2.2, -1, 1);
+  out.pitch = clamp(Math.atan2(to.y, Math.hypot(to.x, to.z)) / (38 * DEG), -1, 1);
+  out.strafe = 0; out.lift = 0;
+  out.throttle = Math.abs(d) > 0.6 ? -0.6 : 0.2;
+}
+
+function placeRig(headWorld, rigYaw) {
+  rig.rotation.set(0, rigYaw, 0);
+  tmpB.copy(camera.position).applyAxisAngle(UP, rigYaw);
+  rig.position.copy(headWorld).sub(tmpB);
+}
+function localHeadYaw() {
+  if (mode !== 'vr') return desk.yaw;
+  tmpC.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  return Math.atan2(-tmpC.x, -tmpC.z);
+}
+
+function mountBroom() {
+  if (flight.active || !broomAvailable()) return;
+  if (stroke) { stroke = null; sound.drawStop(); }
+  flight.active = true; flight.landing = false; flight.speed = 0; flight.vy = 0;
+  flight.time = 0; flight.penalty = 0; flight.running = true; flight.finishT = 0; flight.bumpT = 0;
+  for (const k in flight.c) flight.c[k] = 0;
+  for (const o of fx.orbs) scene.remove(o.g);
+  fx.orbs.length = 0;
+  shield.t = 0; shield.holder.visible = false;
+  guardian.hide();
+  board.g3.visible = false;
+  course.reset(); course.setVisible(true);
+  rig.add(broom.g);
+  broom.aura.visible = false;
+  wand.visible = false; book.visible = false;
+  camera.getWorldPosition(head.pos);
+  flight.heading = rig.rotation.y + localHeadYaw();
+  if (mode === 'vr') { flight.holding = calibrateVR(); }
+  else { flight.holding = true; }
+  flight.prevHead.copy(head.pos);
+  flight.lastSafe.copy(head.pos);
+  dash.mesh.visible = true; arrow.visible = true;
+  sound.windStart();
+  sound.play('schweben', null, 0.7, 0.8);
+  buzzAll(0.6, 80);
+  floatText('Los!', tmpA.copy(head.dir).multiplyScalar(1.5).add(head.pos), '#ffd98a', 0.09);
+}
+
+function endFlightNow(reason) {
+  flight.active = false; flight.landing = false; flight.holding = false; flight.speed = 0; flight.running = false; flight.finishT = 0;
+  ctrls.forEach(c => { c.grabbing = false; });
+  rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
+  scene.add(broom.g);
+  broom.g.position.copy(BROOM_STAND); broom.g.rotation.set(0, 0, 0); broom.g.quaternion.identity();
+  broom.aura.visible = true;
+  dash.mesh.visible = false; arrow.visible = false;
+  vignette.visible = false; flight.vig = 0;
+  board.g3.visible = true;
+  sound.windStop();
+  if (mode === 'vr' && wandOwner) setWandOwner(wandOwner);
+  if (mode === 'desk') wand.visible = true;
+  if (game.free) guardian.show();
+  course.reset();
+  if (reason === 'ziel' && LESSONS[game.lesson].id === 'flug') game.flightDone = true;
+  board.draw();
+}
+
+function land(reason) {
+  if (!flight.active || flight.landing) return;
+  flight.landing = true;
+  if (!fade.run(() => endFlightNow(reason))) endFlightNow(reason);
+}
+
+function respawn() {
+  if (flight.landing) return;
+  flight.landing = true;
+  fade.run(() => {
+    flight.landing = false; flight.speed = 0; flight.penalty += 5;
+    const next = course.rings[course.current];
+    const from = flight.lastSafe.clone();
+    if (next) { const to = next.p.clone().sub(from); flight.heading = Math.atan2(-to.x, -to.z); }
+    placeRig(from, flight.heading - localHeadYaw());
+    camera.getWorldPosition(head.pos);
+    flight.prevHead.copy(head.pos);
+    floatText('Zurück auf Kurs (+5 s)', tmpA.set(-Math.sin(flight.heading), 0, -Math.cos(flight.heading)).multiplyScalar(1.6).add(head.pos), '#ffb3c0', 0.06, BODY_FONT);
+  });
+}
+
+function passRing(r) {
+  const i = course.current;
+  r.state = 'passed'; r.t = 0;
+  course.current++;
+  flight.lastSafe.copy(r.p);
+  particles.burst(r.p, C_GOLD, 70, 3, 0.09, 0.9);
+  sound.play('ring', null, 0.8, 1 + i * 0.035);
+  buzzAll(0.5, 60);
+  if (course.current >= course.rings.length) finishCourse();
+}
+
+function finishCourse() {
+  flight.running = false;
+  const t = flight.time + flight.penalty;
+  const record = flight.best === null || t < flight.best;
+  if (record) { flight.best = t; saveBest(t); }
+  sound.play('erfolg', null, 0.9);
+  for (let k = 0; k < 3; k++) {
+    tmpA.copy(head.dir).multiplyScalar(4).add(head.pos).add(tmpB.set(rand(-1.5, 1.5), rand(0.5, 2), rand(-1.5, 1.5)));
+    particles.burst(tmpA, [C_GOLD, C_SCHILD, C_SCHWEBE][k], 60, 2.5, 0.08, 1.4, -1.5);
+  }
+  floatText(record ? `Bestzeit! ${fmtTime(t)}` : `Ziel! ${fmtTime(t)}`, tmpA.copy(head.dir).multiplyScalar(2).add(head.pos).add(tmpB.set(0, 0.25, 0)), '#ffd98a', 0.1);
+  flight.finishT = 2.2;
+}
+
+function checkRings() {
+  const r = course.rings[course.current];
+  if (!r || flight.landing) return;
+  const s0 = tmpA.copy(flight.prevHead).sub(r.p).dot(r.n);
+  const s1 = tmpB.copy(head.pos).sub(r.p).dot(r.n);
+  if ((s0 < 0) === (s1 < 0)) return;
+  const t = s0 / (s0 - s1);
+  tmpC.copy(flight.prevHead).lerp(head.pos, t);
+  if (tmpC.distanceTo(r.p) <= r.radius) passRing(r);
+}
+
+function resolveCollisions() {
+  const hr = 0.35, p = head.pos;
+  let crash = false;
+  for (const c of colliders.cyl) {
+    const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz);
+    if (d >= c.r + hr || p.y <= c.y0 - hr || p.y >= c.y1 + hr) continue;
+    const side = c.r + hr - d, up = c.y1 + hr - p.y, down = p.y - (c.y0 - hr);
+    if (up <= side && up <= down) rig.position.y += up;          // auf einer Fläche aufsetzen: kein Zusammenstoß
+    else if (down <= side) { rig.position.y -= down; crash = true; }
+    else {
+      const nx = d > 1e-4 ? dx / d : 1, nz = d > 1e-4 ? dz / d : 0;
+      rig.position.x += nx * side; rig.position.z += nz * side; crash = true;
+    }
+    camera.getWorldPosition(p);
+  }
+  for (const s of colliders.sph) {
+    const d = p.distanceTo(s.c);
+    if (d >= s.r + hr) continue;
+    tmpA.copy(p).sub(s.c);
+    if (tmpA.lengthSq() < 1e-8) tmpA.set(0, 1, 0);
+    tmpA.normalize().multiplyScalar(s.r + hr - d);
+    rig.position.add(tmpA);
+    crash = true;
+    camera.getWorldPosition(p);
+  }
+  if (crash && flight.bumpT <= 0) {
+    flight.bumpT = 0.5;
+    flight.speed *= 0.4;
+    sound.play('ploff', p, 1.2);
+    buzzAll(0.9, 120);
+    hitFlash.visible = true; hitFlash.userData.t = 0.25;
+  }
+}
+
+const _ctl = { turn: 0, pitch: 0, strafe: 0, lift: 0, throttle: 0 };
+function updateFlight(dt) {
+  const F = flight;
+  for (const k in _ctl) _ctl[k] = 0;
+  let have = false;
+  if (!F.landing) have = mode === 'vr' ? vrControls(_ctl) : deskControls(_ctl);
+  const holdingNow = have && (mode !== 'vr' || F.holding);
+  const a = 1 - Math.exp(-dt / 0.15);
+  for (const k in _ctl) F.c[k] += (_ctl[k] - F.c[k]) * a;
+  const target = holdingNow ? clamp(7 + F.c.throttle * 6, 1.5, 14) : 0;
+  F.speed += (target - F.speed) * (1 - Math.exp(-dt * (target < F.speed ? 1.6 : 1.0)));
+  F.yawRate = holdingNow ? F.c.turn * 65 * DEG : 0;
+  const pitchA = holdingNow ? F.c.pitch * 38 * DEG : 0;
+  if (F.yawRate !== 0) { F.heading += F.yawRate * dt; rotateRig(F.yawRate * dt); }
+  const h = F.heading, cp = Math.cos(pitchA);
+  const vx = -Math.sin(h) * cp * F.speed + Math.cos(h) * F.c.strafe * 4;
+  const vz = -Math.cos(h) * cp * F.speed - Math.sin(h) * F.c.strafe * 4;
+  F.vy = Math.sin(pitchA) * F.speed + F.c.lift * 3.5;
+  rig.position.x += vx * dt; rig.position.y += F.vy * dt; rig.position.z += vz * dt;
+  camera.getWorldPosition(head.pos);
+  F.bumpT -= dt;
+  resolveCollisions();
+  checkRings();
+  F.prevHead.copy(head.pos);
+  if (F.running) F.time += dt;
+  if (F.finishT > 0) { F.finishT -= dt; if (F.finishT <= 0) land('ziel'); }
+  if (!F.landing && F.finishT <= 0 && (head.pos.y < -26 || Math.hypot(head.pos.x, head.pos.z) > 300 || head.pos.y > 80)) respawn();
+
+  // Wind, Vibration, Tunnelblick
+  sound.windSpeed(F.speed);
+  F.hapT -= dt;
+  if (F.hapT <= 0 && holdingNow && mode === 'vr') { F.hapT = 0.25; const v = F.speed / 14; if (v > 0.15) buzzAll(0.04 + v * 0.12, 50); }
+  const motion = clamp(F.speed / 14 * 0.45 + Math.abs(F.yawRate) / (65 * DEG) * 0.55 + Math.abs(F.vy) / 8 * 0.3, 0, 1);
+  F.vig += ((mode === 'vr' && F.vignette ? motion : 0) - F.vig) * (1 - Math.exp(-dt * 4));
+  vignette.material.uniforms.uStrength.value = F.vig;
+  vignette.visible = F.vig > 0.01;
+
+  // Instrumente und Pfeil vorn am Besen
+  broom.tip.getWorldPosition(tmpA);
+  dash.mesh.position.copy(tmpA).add(tmpB.set(0, 0.17, 0));
+  dash.mesh.lookAt(head.pos);
+  const next = course.rings[course.current];
+  arrow.visible = !!next;
+  if (next) { arrow.position.copy(tmpA).add(tmpB.set(0, 0.34, 0)); arrow.lookAt(next.p); }
+  F.dashT -= dt;
+  if (F.dashT <= 0) { F.dashT = 0.1; dash.draw(); }
+  // Funkenspur zum nächsten Ring
+  if (next) {
+    const dist = head.pos.distanceTo(next.p);
+    if (dist > 6) for (let k = 0; k < 2; k++) {
+      const t = rand(0.25, 1);
+      tmpC.copy(head.pos).lerp(next.p, t);
+      particles.spawn(tmpC, null, C_GOLD, 0.05 + t * 0.06, 0.5);
+    }
+  }
 }
 
 // =====================================================================
@@ -1754,6 +2370,7 @@ function setParticleScale() {
 }
 
 function showMenu() {
+  if (flight.active) endFlightNow('abbruch');
   mode = 'menu';
   ui.start.classList.remove('versteckt');
   ui.hud.classList.add('versteckt');
@@ -1829,7 +2446,7 @@ if (document.fonts && document.fonts.load) {
 const clock = new THREE.Clock();
 let moteT = 0;
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const dt = Math.min(clock.getDelta(), 0.05) * game.timeScale;
   time += dt;
   if (mode === 'menu') {
     camera.rotation.set(-0.02 + Math.sin(time * 0.07) * 0.03, Math.sin(time * 0.05) * 0.45, 0);
@@ -1838,6 +2455,13 @@ function frame() {
   camera.getWorldDirection(head.dir);
   if (mode === 'vr') updateVR(dt);
   else if (mode === 'desk') updateDesk(dt);
+  if (flight.active) updateFlight(dt);
+  else if (broom.g.visible) {
+    broom.g.position.y = BROOM_STAND.y + Math.sin(time * 1.4) * 0.03;
+    broom.aura.material.opacity = 0.25 + Math.sin(time * 2.2) * 0.1;
+  }
+  course.update(dt, time);
+  fade.update(dt);
 
   updateGame(dt);
   for (const c of crates) c.update(dt, time);
@@ -1866,7 +2490,7 @@ startLesson(0);
 setParticleScale();
 renderer.setAnimationLoop(frame);
 window.__akademieBereit = true;
-window.__akademie = { shield, fx, orbDist: () => fx.orbs.length ? fx.orbs[0].g.position.distanceTo(head.pos) : -1, THREE, camera, desk, renderer, particles, ctrls, game, startLesson, castSpell, crystals, lanterns, crates, guardian, head, recognizeRune, get mode() { return mode; }, get stroke() { return stroke; } };
+window.__akademie = { flight, course, broom, colliders, mountBroom, land, COURSE, shield, fx, orbDist: () => fx.orbs.length ? fx.orbs[0].g.position.distanceTo(head.pos) : -1, THREE, camera, desk, renderer, particles, ctrls, game, startLesson, castSpell, crystals, lanterns, crates, guardian, head, recognizeRune, get mode() { return mode; }, get stroke() { return stroke; } };
 </script>
 </body>
 </html>
